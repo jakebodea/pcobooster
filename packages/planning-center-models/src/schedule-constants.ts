@@ -10,6 +10,12 @@ export const PLAN_HISTORY_HALF_RANGE_WEEKS = 4 as const;
 
 export const PLAN_HISTORY_HALF_RANGE_DAYS = 28 as const;
 
+/**
+ * Rehearsals come before their service, so a plan up to a week after the history window can
+ * still hold a rehearsal inside it. History reads plans this far past the window for those.
+ */
+export const REHEARSAL_WINDOW_MARGIN_DAYS = 7 as const;
+
 /** Default nearby-schedule popover window (±3 weeks). */
 export const SCHEDULE_CONTEXT_DEFAULT_HALF_RANGE_WEEKS = 3 as const;
 

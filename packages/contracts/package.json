@@ -9,6 +9,7 @@
     "./admin": "./src/admin.ts",
     "./catalog": "./src/catalog.ts",
     "./chord-charts": "./src/chord-charts.ts",
+    "./cleanup": "./src/cleanup.ts",
     "./demo": "./src/demo.ts",
     "./errors": "./src/errors.ts",
     "./features": "./src/features.ts",

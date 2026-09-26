@@ -11,6 +11,9 @@ import {
   PROGRESSIVE_REQUEST_BUDGET,
 } from "@pcobooster/api/planning-center/request-budget";
 import { countedRead } from "@pcobooster/api/testing/planning-center-requests";
+import { buildFrequencyFromServiceHistory } from "@pcobooster/planning-center-models/candidate-frequency";
+import { isString } from "@pcobooster/planning-center-models/json";
+import { expandPlanWindowHistory } from "@pcobooster/planning-center-models/plan-window-history";
 import type { PCResource } from "@pcobooster/planning-center-models/types";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -145,6 +148,76 @@ const loadAll = async (
   };
 };
 
+const lateRehearsalPlanTime = (
+  id: string,
+  planId: string,
+  timeType: string,
+  startsAt: string
+): PCResource => ({
+  type: "PlanTime",
+  id,
+  attributes: { time_type: timeType, starts_at: startsAt },
+  relationships: { plan: { data: { type: "Plan", id: planId } } },
+});
+const lateRehearsalPlan = (
+  id: string,
+  sortDate: string,
+  timeIds: string[]
+) => ({
+  type: "Plan",
+  id,
+  attributes: { sort_date: sortDate, plan_people_count: 1 },
+  relationships: {
+    plan_times: {
+      data: timeIds.map((timeId) => ({ type: "PlanTime", id: timeId })),
+    },
+  },
+});
+// The window ends Sunday May 31; the June 4 plan rehearses on May 30, the June 7 one on June 6.
+const LATE_REHEARSAL_PLANS: PCResource[] = [
+  lateRehearsalPlan("plan-may-31", "2026-05-31T10:00:00Z", ["svc-may-31"]),
+  lateRehearsalPlan("plan-jun-4", "2026-06-04T10:00:00Z", [
+    "reh-may-30",
+    "svc-jun-4",
+  ]),
+  lateRehearsalPlan("plan-jun-7", "2026-06-07T10:00:00Z", [
+    "reh-jun-6",
+    "svc-jun-7",
+  ]),
+];
+const LATE_REHEARSAL_PLAN_TIMES = [
+  lateRehearsalPlanTime(
+    "svc-may-31",
+    "plan-may-31",
+    "service",
+    "2026-05-31T10:00:00Z"
+  ),
+  lateRehearsalPlanTime(
+    "reh-may-30",
+    "plan-jun-4",
+    "rehearsal",
+    "2026-05-30T18:00:00Z"
+  ),
+  lateRehearsalPlanTime(
+    "svc-jun-4",
+    "plan-jun-4",
+    "service",
+    "2026-06-04T10:00:00Z"
+  ),
+  lateRehearsalPlanTime(
+    "reh-jun-6",
+    "plan-jun-7",
+    "rehearsal",
+    "2026-06-06T18:00:00Z"
+  ),
+  lateRehearsalPlanTime(
+    "svc-jun-7",
+    "plan-jun-7",
+    "service",
+    "2026-06-07T10:00:00Z"
+  ),
+];
+
 describe(getPlanWindowHistory, () => {
   it("counts real requests, so cached plan ranges leave the budget to rosters", async () => {
     const { batch, requests } = await runCall(
@@ -187,5 +260,109 @@ describe(getPlanWindowHistory, () => {
       loaded,
       underCap: requests.every((sent) => sent <= PLANNING_CENTER_REQUEST_CAP),
     }).toStrictEqual({ loaded: 24, underCap: true });
+  });
+
+  it("keeps rehearsals inside the window that belong to plans just after it", async () => {
+    const serviceTypeId = "st-sun";
+    const rostersRead: string[] = [];
+    const dependencies = {
+      catalog: {
+        getServiceTypesCached: () =>
+          countedRead([
+            {
+              type: "ServiceType",
+              id: serviceTypeId,
+              attributes: { archived_at: null, name: "Sunday" },
+            },
+          ]),
+      },
+      people: {
+        getPlanWindowRoster: (_serviceTypeId: string, planId: string) => {
+          rostersRead.push(planId);
+          const timeIds = LATE_REHEARSAL_PLAN_TIMES.flatMap((resource) =>
+            resource.relationships?.plan?.data !== null &&
+            !Array.isArray(resource.relationships?.plan?.data) &&
+            resource.relationships?.plan?.data?.id === planId
+              ? [resource.id]
+              : []
+          );
+          return countedRead({
+            data: [
+              {
+                type: "PlanPerson",
+                id: `${planId}-member`,
+                attributes: {
+                  status: "C",
+                  team_position_name: "Band - Vocals",
+                  created_at: "2026-01-01T00:00:00Z",
+                },
+                relationships: {
+                  person: { data: { type: "Person", id: "p-ana" } },
+                  plan: { data: { type: "Plan", id: planId } },
+                  times: {
+                    data: timeIds.map((id) => ({ type: "PlanTime", id })),
+                  },
+                  service_times: {
+                    data: timeIds
+                      .filter((id) => id.startsWith("svc-"))
+                      .map((id) => ({ type: "PlanTime", id })),
+                  },
+                },
+              },
+            ],
+            included: [],
+          });
+        },
+      },
+      plans: {
+        getPlansWithIncludedInDateRange: (
+          _serviceTypeId: string,
+          afterDayKey: string,
+          beforeDayKey: string
+        ) => {
+          const data = LATE_REHEARSAL_PLANS.filter(({ attributes }) => {
+            const sortDate = attributes.sort_date;
+            const day = isString(sortDate) ? sortDate.slice(0, 10) : "";
+            return day >= afterDayKey && day <= beforeDayKey;
+          });
+          const planIds = new Set(data.map(({ id }) => id));
+          return countedRead({
+            data,
+            included: LATE_REHEARSAL_PLAN_TIMES.filter((resource) => {
+              const related = resource.relationships?.plan?.data;
+              return (
+                related !== null &&
+                related !== undefined &&
+                !Array.isArray(related) &&
+                planIds.has(related.id)
+              );
+            }),
+          });
+        },
+      },
+      resolveTimeZone: countedRead("UTC"),
+    } satisfies PlanWindowHistoryDependencies;
+
+    const { batch } = await runCall({ date: PLAN_DATE }, dependencies);
+    const history = expandPlanWindowHistory([batch], "plan-may-31").get(
+      "p-ana"
+    );
+    const frequency = buildFrequencyFromServiceHistory(
+      history?.serviceHistory ?? [],
+      new Date(PLAN_DATE),
+      "UTC"
+    );
+
+    expect({
+      rostersRead: rostersRead.toSorted(),
+      upcomingServices: frequency.upcomingServices,
+      upcomingRehearsals: frequency.upcomingRehearsals,
+      nextRehearsal: frequency.nextRehearsalDate?.toISOString(),
+    }).toStrictEqual({
+      rostersRead: ["plan-jun-4", "plan-may-31"],
+      upcomingServices: 1,
+      upcomingRehearsals: 1,
+      nextRehearsal: "2026-05-30T18:00:00.000Z",
+    });
   });
 });

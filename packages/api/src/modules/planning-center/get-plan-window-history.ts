@@ -30,7 +30,10 @@ import type {
   WindowPlanSummary,
   WindowRosterRow,
 } from "@pcobooster/planning-center-models/plan-window-history";
-import { PLAN_HISTORY_HALF_RANGE_DAYS } from "@pcobooster/planning-center-models/schedule-constants";
+import {
+  PLAN_HISTORY_HALF_RANGE_DAYS,
+  REHEARSAL_WINDOW_MARGIN_DAYS,
+} from "@pcobooster/planning-center-models/schedule-constants";
 import type {
   PCResource,
   RawPlanPerson,
@@ -167,6 +170,45 @@ const appendIncludedResources = (
       target.push(resource);
     }
   }
+};
+
+const dayKeyOf = (
+  value: string | null | undefined,
+  orgTimeZone: string
+): string | null => {
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+  const instant = new Date(value);
+  return Number.isNaN(instant.getTime())
+    ? null
+    : formatCalendarDayInTimeZone(instant, orgTimeZone);
+};
+
+/**
+ * Whether a plan's roster adds history to a window ending on `lastDayKey`: plans on or before it,
+ * and later plans (read up to `REHEARSAL_WINDOW_MARGIN_DAYS` past it) with a rehearsal inside it.
+ */
+const addsWindowHistory = (
+  plan: PCResource,
+  planTimes: readonly RawPlanTime[],
+  lastDayKey: string,
+  orgTimeZone: string
+): boolean => {
+  const planDayKey = dayKeyOf(
+    isString(plan.attributes.sort_date) ? plan.attributes.sort_date : null,
+    orgTimeZone
+  );
+  if (planDayKey === null || planDayKey <= lastDayKey) {
+    return true;
+  }
+  return planTimes.some(({ attributes }) => {
+    if (attributes.time_type !== "rehearsal") {
+      return false;
+    }
+    const dayKey = dayKeyOf(attributes.starts_at, orgTimeZone);
+    return dayKey !== null && dayKey <= lastDayKey;
+  });
 };
 
 interface WindowPlan {
@@ -322,7 +364,8 @@ const serviceTypeIdsOf = (plans: readonly WindowPlanRef[]): string[] => [
 
 /**
  * History for the candidate list from the rosters of every plan within 28 days either side of
- * the selected plan, across active service types. Each call plans against
+ * the selected plan, across active service types, plus plans up to a week after the window that
+ * hold a rehearsal inside it. Each call plans against
  * `PROGRESSIVE_REQUEST_BUDGET` Planning Center requests, counting what was really sent.
  *
  * The first call lists the window's plans (one plan-range read per service type) and reads
@@ -347,6 +390,11 @@ export const getPlanWindowHistory = (
     const beforeDayKey = addCalendarDaysToDayKey(
       refDayKey,
       PLAN_HISTORY_HALF_RANGE_DAYS,
+      orgTimeZone
+    );
+    const rangeEndDayKey = addCalendarDaysToDayKey(
+      beforeDayKey,
+      REHEARSAL_WINDOW_MARGIN_DAYS,
       orgTimeZone
     );
     const activeServiceTypes = (yield* catalog.getServiceTypesCached()).filter(
@@ -390,7 +438,7 @@ export const getPlanWindowHistory = (
           plans.getPlansWithIncludedInDateRange(
             serviceTypeId,
             afterDayKey,
-            beforeDayKey,
+            rangeEndDayKey,
             "plan_times",
             orgTimeZone
           ),
@@ -428,9 +476,21 @@ export const getPlanWindowHistory = (
     for (const serviceTypeId of listedIds) {
       const range = rangeByServiceTypeId.get(serviceTypeId);
       for (const plan of range?.data ?? []) {
-        windowPlans.push(
-          toWindowPlan(serviceTypeId, plan, range?.included ?? [])
+        const windowPlan = toWindowPlan(
+          serviceTypeId,
+          plan,
+          range?.included ?? []
         );
+        if (
+          addsWindowHistory(
+            plan,
+            windowPlan.planTimes,
+            beforeDayKey,
+            orgTimeZone
+          )
+        ) {
+          windowPlans.push(windowPlan);
+        }
       }
     }
 

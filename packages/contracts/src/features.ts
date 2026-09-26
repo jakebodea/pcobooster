@@ -26,6 +26,14 @@ export const featuresContract = {
     })
     .input(featureInputSchema)
     .output(featureSchema),
+  cleanup: featureProcedure
+    .route({
+      method: "GET",
+      path: "/features/cleanup",
+      summary: "Check whether the Data cleanup page is enabled",
+    })
+    .input(featureInputSchema)
+    .output(featureSchema),
 };
 
 export type FeatureStatus = z.output<typeof featureSchema>;

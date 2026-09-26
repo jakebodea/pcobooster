@@ -19,7 +19,10 @@ import {
 } from "@pcobooster/planning-center-models/calendar";
 import { isNonEmptyString } from "@pcobooster/planning-center-models/json";
 import type { CandidateHistory } from "@pcobooster/planning-center-models/position-candidates";
-import { PLAN_HISTORY_HALF_RANGE_DAYS } from "@pcobooster/planning-center-models/schedule-constants";
+import {
+  PLAN_HISTORY_HALF_RANGE_DAYS,
+  REHEARSAL_WINDOW_MARGIN_DAYS,
+} from "@pcobooster/planning-center-models/schedule-constants";
 import type {
   PCRelationship,
   PCResource,
@@ -34,11 +37,6 @@ const log = logger.for("planning-center/candidate-details");
  * schedules) almost always covers the window; two leave room for heavy servers.
  */
 const SCHEDULE_MAX_PAGES = 2;
-/**
- * Rehearsals come before their service, so a plan up to a week after the window can still hold
- * a rehearsal inside it. Later plans only count as upcoming and need no rehearsal times.
- */
-const REHEARSAL_WINDOW_MARGIN_DAYS = 7;
 /**
  * Plan-times reads for one person's rehearsals, at most: a plan every week of the window and a
  * midweek one on top. Later plans in the window keep their plan dates without rehearsal times.

@@ -31,6 +31,12 @@ export const featureFlags = {
       "Shows the Songs chord chart editor and serves its API, which writes arrangement chord charts to Planning Center. Managed by Alchemy; dashboard edits are overwritten on deploy.",
     enabled: { local: true, preview: true, production: false },
   },
+  cleanup: {
+    key: "data-cleanup-page",
+    description:
+      "Shows the Data cleanup page and serves its recommendations API. Managed by Alchemy; dashboard edits are overwritten on deploy.",
+    enabled: { local: true, preview: true, production: false },
+  },
 } as const satisfies Readonly<Record<string, BooleanFeatureFlag>>;
 
 export type FeatureFlagName = keyof typeof featureFlags;

@@ -81,6 +81,18 @@ const chordChartsFeature = rpc.features.chordCharts.handler(
   }
 );
 
+const cleanupFeature = rpc.features.cleanup.handler(
+  async ({ context, signal }) => {
+    applyPrivateNoStore(context.resHeaders);
+    return await executeApplicationEffect(
+      applicationRuntime,
+      getFeatureStatus("cleanup"),
+      context,
+      signal
+    );
+  }
+);
+
 const adminAccounts = rpc.admin.accounts.handler(
   async ({ context, signal }) => {
     applyPrivateNoStore(context.resHeaders);
@@ -106,6 +118,10 @@ const adminUser = rpc.admin.user.handler(async ({ input, context, signal }) => {
 export const identityRouter = {
   accounts: { list: accountsList, select: accountsSelect },
   admin: { accounts: adminAccounts, user: adminUser },
-  features: { people: peopleFeature, chordCharts: chordChartsFeature },
+  features: {
+    people: peopleFeature,
+    chordCharts: chordChartsFeature,
+    cleanup: cleanupFeature,
+  },
   session: { status: sessionStatus },
 };

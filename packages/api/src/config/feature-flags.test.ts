@@ -39,6 +39,14 @@ describe("feature flag registry", () => {
       production: false,
     });
   });
+
+  it("keeps Data cleanup on locally and in previews, off in production", () => {
+    expect(featureFlags.cleanup.enabled).toStrictEqual({
+      local: true,
+      preview: true,
+      production: false,
+    });
+  });
 });
 
 describe(deploymentTier, () => {

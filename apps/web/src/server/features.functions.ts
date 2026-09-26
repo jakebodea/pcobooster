@@ -25,3 +25,8 @@ export const getPeopleFeature = createServerFn({ method: "GET" }).handler(
 export const getChordChartsFeature = createServerFn({ method: "GET" }).handler(
   async () => await createRequestRpcClient().features.chordCharts({})
 );
+
+/** Whether the Data cleanup page is on for this visitor (the `cleanup` flag). */
+export const getCleanupFeature = createServerFn({ method: "GET" }).handler(
+  async () => await createRequestRpcClient().features.cleanup({})
+);

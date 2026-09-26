@@ -1,8 +1,13 @@
-export type FeatureName = "people" | "chordCharts";
+export type FeatureName = "people" | "chordCharts" | "cleanup";
 
 export const queryKeys = {
   accounts: () => ["planning-center-accounts"] as const,
   feature: (feature: FeatureName) => ["feature", feature] as const,
+  cleanupSongs: (staleMonths: number) =>
+    ["cleanup-songs", staleMonths] as const,
+  cleanupPeopleRoster: () => ["cleanup-people-roster"] as const,
+  cleanupPeopleActivity: (staleMonths: number, personIds: readonly string[]) =>
+    ["cleanup-people-activity", staleMonths, ...personIds] as const,
   organizationTimeZone: () =>
     ["planning-center-organization-time-zone"] as const,
   serviceTypes: () => ["service-types"] as const,
