@@ -70,6 +70,8 @@ export const getCleanupPeopleRoster = (): Effect.Effect<
     const roster = yield* getPeopleDashboardRoster({
       peopleService: access.services.people,
       resolveTimeZone: access.services.organizationTimeZone,
+      // Cleanup lists everyone; it never scopes to the viewer's teams.
+      viewerPersonId: null,
     });
     return yield* presentDashboardRoster(
       roster,
