@@ -6,6 +6,7 @@ import {
 } from "@pcobooster/api/application/planning-center-access";
 import type { PlanningCenterAccessDependencies } from "@pcobooster/api/application/planning-center-access";
 import type { ApplicationRuntime } from "@pcobooster/api/application/runtime";
+import type { Server } from "@pcobooster/api/server";
 import type { RpcContext } from "@pcobooster/api/transport/orpc/context";
 import { executeApplicationEffect } from "@pcobooster/api/transport/orpc/execute";
 import { Effect } from "effect";
@@ -19,7 +20,7 @@ export const executePreparedPlanningCenterWrite = async <Preparation, Value>(
   prepare: Effect.Effect<
     Preparation,
     ApplicationFault,
-    PlanningCenterAccess | RequestContext
+    PlanningCenterAccess | RequestContext | Server
   >,
   commit: (
     prepared: Preparation

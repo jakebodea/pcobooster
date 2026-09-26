@@ -115,6 +115,84 @@ describe(PlanningCenterRatePacer, () => {
     expect(waitOf(pacer.reserve("bearer:other", 1000, "read"))).toBe(0);
   });
 
+  it("sends speculative reads while the window is mostly unused", () => {
+    const pacer = new PlanningCenterRatePacer();
+    expect(waitOf(pacer.reserve(SCOPE, 0, "read", "speculative"))).toBe(0);
+    pacer.complete(SCOPE, 0, rateHeaders(20));
+    expect(waitOf(pacer.reserve(SCOPE, 1000, "read", "speculative"))).toBe(0);
+  });
+
+  it("holds speculative reads back once the speculative share is used, counting reads in flight", () => {
+    const pacer = new PlanningCenterRatePacer();
+    observe(pacer, 0, 30);
+    for (let request = 0; request < 9; request += 1) {
+      expect(waitOf(pacer.reserve(SCOPE, 1000, "read", "speculative"))).toBe(0);
+    }
+    // 30 reported plus 9 in flight is 39; the 40th would reach 40% of the limit.
+    expect(pacer.reserve(SCOPE, 1000, "read", "speculative")).toStrictEqual({
+      kind: "send",
+      waitMs: 0,
+      window: { limit: 100, count: 30, periodMs: 20_000, inFlight: 9 },
+    });
+    expect(pacer.reserve(SCOPE, 1000, "read", "speculative")).toMatchObject({
+      kind: "reject",
+      reason: "speculative",
+      retryAfterMs: 19_000,
+    });
+  });
+
+  it("keeps the budget above the speculative share for interactive reads", () => {
+    const pacer = new PlanningCenterRatePacer();
+    observe(pacer, 0, 45);
+    expect(pacer.reserve(SCOPE, 1000, "read", "speculative")).toMatchObject({
+      kind: "reject",
+      reason: "speculative",
+    });
+    expect(waitOf(pacer.reserve(SCOPE, 1000, "read", "interactive"))).toBe(0);
+  });
+
+  it("never lets a speculative read wait for a slot or jump the pacing queue", () => {
+    const pacer = new PlanningCenterRatePacer({ speculativeShare: 0.9 });
+    observe(pacer, 0, 80);
+    // Interactive reads are spaced; the speculative one is not queued behind or ahead of them.
+    expect(waitOf(pacer.reserve(SCOPE, 10_000, "read"))).toBe(0);
+    expect(pacer.reserve(SCOPE, 10_000, "read", "speculative")).toMatchObject({
+      kind: "reject",
+      reason: "speculative",
+    });
+    expect(waitOf(pacer.reserve(SCOPE, 10_000, "read"))).toBe(500);
+  });
+
+  it("holds speculative reads back while a 429 blocks the credential", () => {
+    const pacer = new PlanningCenterRatePacer();
+    observe(pacer, 0, 10);
+    pacer.reserve(SCOPE, 1000, "read");
+    pacer.complete(SCOPE, 1000, {
+      status: 429,
+      rateLimit: { limit: 100, count: 10, retryAfterSeconds: 3 },
+    });
+    expect(pacer.reserve(SCOPE, 1000, "read", "speculative")).toMatchObject({
+      kind: "reject",
+      reason: "speculative",
+      retryAfterMs: 3000,
+    });
+  });
+
+  it("labels an interactive rejection as a spent budget", () => {
+    const pacer = new PlanningCenterRatePacer({ maxWaitMs: 5000 });
+    observe(pacer, 0, 100);
+    expect(pacer.reserve(SCOPE, 2000, "read")).toMatchObject({
+      kind: "reject",
+      reason: "budget",
+    });
+  });
+
+  it("never holds back speculative writes", () => {
+    const pacer = new PlanningCenterRatePacer();
+    observe(pacer, 0, 100);
+    expect(waitOf(pacer.reserve(SCOPE, 1000, "write", "speculative"))).toBe(0);
+  });
+
   it("releases reservations that end without a response", () => {
     const pacer = new PlanningCenterRatePacer();
     observe(pacer, 0, 10);

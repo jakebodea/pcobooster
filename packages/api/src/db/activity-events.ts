@@ -14,7 +14,8 @@ export type ActivityEventType =
   | "schedule_remove"
   | "auth_session_created"
   | "auth_session_deleted"
-  | "auth_account_linked";
+  | "auth_account_linked"
+  | "auth_sign_in_failed";
 
 export interface ActivityEventInput {
   eventType: ActivityEventType;

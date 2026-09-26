@@ -6,6 +6,7 @@ import { useCallback } from "react";
 
 import { useHydrateQueryFromCache } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { callForQuery } from "@/lib/request-priority";
 import {
   readCachedSongOptions,
   writeCachedSongOptions,
@@ -17,14 +18,15 @@ export const createSongOptionsQueryOptions = (
   serviceTypeId: string | null
 ) => ({
   queryKey: queryKeys.songOptions(songId, serviceTypeId),
-  queryFn: async ({ signal }: QueryFunctionContext) => {
+  queryFn: async (context: QueryFunctionContext) => {
     if (!isNonEmptyString(songId) || !isNonEmptyString(serviceTypeId)) {
       return null;
     }
 
-    const optionSet = await orpc.songs.options(
-      { songId, serviceTypeId },
-      { signal }
+    const optionSet = await callForQuery(
+      context,
+      async (options) =>
+        await orpc.songs.options({ songId, serviceTypeId }, options)
     );
     writeCachedSongOptions(songId, serviceTypeId, optionSet);
     return optionSet;

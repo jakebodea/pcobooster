@@ -259,7 +259,7 @@ Ranked by expected benefit for the effort. "After rewrite" marks changes to `cor
    - Also merge the two unbounded schedule reads (`:70-83`) into one bounded `filter=after` query.
    - Expected: about 50 to 70 cold drops to about 5 to 10.
 
-6. **Replace the fixed 1 s pause with pacing based on the headers, shared per credential.** Medium effort. **After rewrite.** **Implemented** for pacing, the 5 s cap, and the typed fail-fast (`PlanningCenterRateLimitError`, mapped to `RateLimited`). Pacing starts at half the reported limit. Not implemented: marking optional work (prefetch, `people.warmup`) to fail earlier than required reads, and serving stale cache entries when the budget is low.
+6. **Replace the fixed 1 s pause with pacing based on the headers, shared per credential.** Medium effort. **After rewrite.** **Implemented** for pacing, the 5 s cap, and the typed fail-fast (`PlanningCenterRateLimitError`, mapped to `RateLimited`). Pacing starts at half the reported limit. **Implemented** (`planning-center-api-optimization`): optional work is marked speculative in the browser and fails earlier than required reads; see [Request priority](../api-architecture.md#request-priority). Not implemented: serving stale cache entries when the budget is low.
    - Keep one in-isolate limiter per cache scope. Seed it from the last seen `Rate-Count`, `Rate-Limit`, and `Rate-Period`, and let concurrent procedures for that user take tokens from it before they send.
    - When the budget runs low:
      - Spread required reads across the time left in the window: wait about `remaining window / remaining budget` per request. Do not wait after the response.

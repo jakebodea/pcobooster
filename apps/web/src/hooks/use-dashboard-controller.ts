@@ -14,6 +14,7 @@ import { createPlanItemsQueryOptions } from "@/hooks/use-plan-items";
 import { usePlanTimes } from "@/hooks/use-plan-times";
 import { usePlans } from "@/hooks/use-plans";
 import {
+  createPlanWindowHistoryQueryOptions,
   isPositionCandidatesFresh,
   prefetchPositionCandidates,
   toPlanDateKey,
@@ -23,6 +24,7 @@ import type { CandidateSlot } from "@/hooks/use-position-candidates";
 import { useServiceTypes } from "@/hooks/use-service-types";
 import { useTeamPositions } from "@/hooks/use-team-positions";
 import { queryKeys } from "@/lib/query-keys";
+import { requestScheduler, speculativeQuery } from "@/lib/request-priority";
 import type {
   DashboardView,
   PlanSlotSelection,
@@ -226,25 +228,45 @@ export const useDashboardController = ({
     view,
   ]);
 
-  const prefetchPlanItems = useCallback(async () => {
-    if (!routeServiceTypeId || !routePlanId) {
-      return;
-    }
-    try {
-      await queryClient.query(
-        createPlanItemsQueryOptions(routeServiceTypeId, routePlanId)
-      );
-    } catch {
-      // Opening the Plan tab owns any visible loading error.
-    }
-  }, [queryClient, routePlanId, routeServiceTypeId]);
-
+  // What the other tabs need waits in the speculative lane, behind the view on screen: the
+  // Plan tab's items, and on the Assign view the plan-window history every position's
+  // candidates are scored with (up to about 40 Planning Center requests cold).
   useEffect(() => {
-    if (!hasPlanUrlSelection || activeView === "plan") {
-      return;
+    const leave = new AbortController();
+    if (hasPlanUrlSelection && activeView !== "plan") {
+      void requestScheduler.runSpeculative(async () => {
+        await queryClient.query(
+          speculativeQuery(
+            createPlanItemsQueryOptions(routeServiceTypeId, routePlanId)
+          )
+        );
+      }, leave.signal);
     }
-    void prefetchPlanItems();
-  }, [activeView, hasPlanUrlSelection, prefetchPlanItems]);
+    return () => {
+      leave.abort();
+    };
+  }, [
+    activeView,
+    hasPlanUrlSelection,
+    queryClient,
+    routePlanId,
+    routeServiceTypeId,
+  ]);
+
+  const planDateKey = toPlanDateKey(selectedPlan?.sortDate ?? null);
+  useEffect(() => {
+    const leave = new AbortController();
+    if (activeView === "assign" && planDateKey !== null) {
+      void requestScheduler.runSpeculative(async () => {
+        await queryClient.query(
+          speculativeQuery(createPlanWindowHistoryQueryOptions(planDateKey))
+        );
+      }, leave.signal);
+    }
+    return () => {
+      leave.abort();
+    };
+  }, [activeView, planDateKey, queryClient]);
 
   const getCandidateSlot = useCallback(
     (slot: SlotRef): CandidateSlot | null => {
@@ -306,8 +328,8 @@ export const useDashboardController = ({
     if (!isNonEmptyString(routeIds.positionId)) {
       openedSlotFromListRef.current = true;
     }
+    // The selected slot's queries load its list as interactive work.
     cancelSlotIntent();
-    void prefetchSlotPeople(slot);
 
     if (selectedPlanId) {
       setCollapsedTeamsByPlan((prev) => {

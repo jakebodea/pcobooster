@@ -23,7 +23,13 @@ export const featureFlags = {
     key: "people-page",
     description:
       "Shows the People pages and serves the People dashboard API. Managed by Alchemy; dashboard edits are overwritten on deploy.",
-    enabled: { local: true, preview: false, production: false },
+    enabled: { local: true, preview: true, production: false },
+  },
+  chordCharts: {
+    key: "chord-charts",
+    description:
+      "Shows the Songs chord chart editor and serves its API, which writes arrangement chord charts to Planning Center. Managed by Alchemy; dashboard edits are overwritten on deploy.",
+    enabled: { local: true, preview: true, production: false },
   },
 } as const satisfies Readonly<Record<string, BooleanFeatureFlag>>;
 

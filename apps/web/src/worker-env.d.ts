@@ -16,6 +16,8 @@ declare module "cloudflare:workers" {
     /** Static assets, including the staged marketing site. */
     ASSETS: Fetcher;
     PRODUCT_ORIGIN: string;
+    /** The deployed commit; empty outside CI deploys. */
+    PCOBOOSTER_VERSION: string;
     /** Local stage only; ignored by production builds. */
     DEV_AUTH_BYPASS?: string;
   }

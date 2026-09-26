@@ -18,6 +18,14 @@ export const featuresContract = {
     })
     .input(featureInputSchema)
     .output(featureSchema),
+  chordCharts: featureProcedure
+    .route({
+      method: "GET",
+      path: "/features/chord-charts",
+      summary: "Check whether the chord chart editor is enabled",
+    })
+    .input(featureInputSchema)
+    .output(featureSchema),
 };
 
 export type FeatureStatus = z.output<typeof featureSchema>;

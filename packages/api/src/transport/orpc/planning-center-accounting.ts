@@ -5,6 +5,7 @@ import {
 } from "@pcobooster/api/planning-center/request-accounting";
 import type { PlanningCenterLogger } from "@pcobooster/api/planning-center/request-accounting";
 import { PLANNING_CENTER_REQUEST_CAP } from "@pcobooster/api/planning-center/request-budget";
+import type { RequestPriority } from "@pcobooster/contracts/request-priority";
 
 export interface PlanningCenterProcedureAccountingOptions {
   readonly logger?: PlanningCenterLogger;
@@ -17,6 +18,8 @@ export interface PlanningCenterProcedure {
   /** Dotted oRPC path, for example `people.planWindowHistory`. */
   readonly procedure: string;
   readonly requestId: string;
+  /** From the browser's priority header; defaults to interactive. */
+  readonly priority?: RequestPriority;
   /** Present when an outer middleware already counts this procedure. */
   readonly accounting?: PlanningCenterRequestAccounting;
 }
@@ -27,7 +30,12 @@ export interface PlanningCenterProcedure {
  * shares the accounting through the oRPC context.
  */
 export const accountPlanningCenterProcedure = async <Result>(
-  { procedure, requestId, accounting: existing }: PlanningCenterProcedure,
+  {
+    procedure,
+    requestId,
+    priority = "interactive",
+    accounting: existing,
+  }: PlanningCenterProcedure,
   run: (accounting: PlanningCenterRequestAccounting) => Promise<Result>,
   options: PlanningCenterProcedureAccountingOptions = {}
 ): Promise<Result> => {
@@ -37,6 +45,7 @@ export const accountPlanningCenterProcedure = async <Result>(
   const now = options.now ?? Date.now;
   const accounting = new PlanningCenterRequestAccounting({
     requestBudget: options.requestBudget ?? PLANNING_CENTER_REQUEST_CAP,
+    priority,
   });
   const startedAt = now();
   let outcome: "success" | "failure" = "failure";
@@ -47,7 +56,13 @@ export const accountPlanningCenterProcedure = async <Result>(
   } finally {
     logPlanningCenterProcedureSummary(
       options.logger ?? logger.for("planning-center/procedure"),
-      { procedure, requestId, durationMs: now() - startedAt, outcome },
+      {
+        procedure,
+        requestId,
+        priority,
+        durationMs: now() - startedAt,
+        outcome,
+      },
       accounting
     );
   }

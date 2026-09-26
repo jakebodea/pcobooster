@@ -160,7 +160,7 @@ describe(createFlagshipFeatureFlags, () => {
 describe(createRegistryFeatureFlags, () => {
   it.each([
     ["local", true],
-    ["preview", false],
+    ["preview", true],
     ["production", false],
   ] as const)("serves the %s value of the People flag", async (tier, value) => {
     await expect(

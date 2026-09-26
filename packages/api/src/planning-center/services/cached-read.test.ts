@@ -1,7 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import {
+  currentRequestPriority,
+  PlanningCenterAccounting,
+} from "@pcobooster/api/planning-center/accounting";
 import { PlanningCenterApiError } from "@pcobooster/api/planning-center/api-error";
 import type { PlanningCenterError } from "@pcobooster/api/planning-center/core-client";
+import { PlanningCenterRateLimitError } from "@pcobooster/api/planning-center/rate-limit-error";
+import { PlanningCenterRequestAccounting } from "@pcobooster/api/planning-center/request-accounting";
 import { cachedRead } from "@pcobooster/api/planning-center/services/cached-read";
 import { PlanningCenterReadCache } from "@pcobooster/api/planning-center/services/read-cache";
 import { Cause, Effect, Exit, Fiber } from "effect";
@@ -131,5 +137,54 @@ describe(cachedRead, () => {
             .map((reason) => reason.defect)
         : []
     ).toStrictEqual([defect]);
+  });
+
+  it("loads again for an interactive caller that joined a held-back speculative load", async () => {
+    const cache = new PlanningCenterReadCache<string>();
+    const release = Promise.withResolvers<null>();
+    // Like the pacer: a speculative load is held back, an interactive one is sent.
+    const load = vi.fn<() => Effect.Effect<string, PlanningCenterError>>(() =>
+      Effect.gen(function* pacedLoad() {
+        const priority = yield* currentRequestPriority;
+        yield* Effect.promise(async () => {
+          await release.promise;
+        });
+        if (priority === "speculative") {
+          return yield* Effect.fail(
+            new PlanningCenterRateLimitError({
+              retryAfterSeconds: 12,
+              reason: "speculative",
+            })
+          );
+        }
+        return "loaded";
+      })
+    );
+    const asPriority = (priority: "interactive" | "speculative") =>
+      Effect.provideService(
+        cachedRead(cache, "joined", TTL_MS, load),
+        PlanningCenterAccounting,
+        new PlanningCenterRequestAccounting({ priority })
+      );
+
+    const [prefetch, visible] = await Effect.runPromise(
+      Effect.gen(function* prefetchThenOpen() {
+        const speculative = yield* Effect.forkChild(
+          Effect.exit(asPriority("speculative"))
+        );
+        yield* settle;
+        const interactive = yield* Effect.forkChild(asPriority("interactive"));
+        yield* settle;
+        release.resolve(null);
+        return [
+          yield* Fiber.join(speculative),
+          yield* Fiber.join(interactive),
+        ] as const;
+      })
+    );
+
+    expect(visible).toBe("loaded");
+    expect(Exit.isFailure(prefetch)).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(2);
   });
 });

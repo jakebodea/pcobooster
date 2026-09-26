@@ -7,7 +7,9 @@ import {
   Layout3ColumnIcon,
   ListMusicIcon,
   Logout01Icon,
+  UserSwitchIcon,
   Moon02Icon,
+  MusicNote03Icon,
   Settings02Icon,
   Sun01Icon,
   Tick02Icon,
@@ -94,6 +96,7 @@ import {
   planViews,
 } from "@/lib/app-routes";
 import { presentationMode } from "@/lib/build-settings";
+import { chordChartsFeatureQueryOptions } from "@/lib/chord-charts-route";
 import { peopleFeatureQueryOptions } from "@/lib/people-route";
 import { cn } from "@/lib/utils";
 
@@ -150,23 +153,23 @@ const AppTopBar = () => {
   const hasPlan = planRoute !== null;
   const planView = planRoute?.view ?? "assign";
   const planViewLabel = getPlanViewLabel(planView);
-  const isPersonDetail = /^\/people\/[^/]+/u.test(pathname);
+  const detail = parseDetailRoute(pathname);
   const pageLabel = getAppSectionLabel(getAppSection(pathname));
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2 sm:gap-3">
       <Breadcrumb className="shrink-0">
         <BreadcrumbList>
-          {isPersonDetail ? (
+          {detail ? (
             <>
               <BreadcrumbItem>
-                <BreadcrumbLink render={<Link to="/people" />}>
-                  People
+                <BreadcrumbLink render={<Link to={detail.parentHref} />}>
+                  {detail.parentLabel}
                 </BreadcrumbLink>
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <BreadcrumbPage>Person</BreadcrumbPage>
+                <BreadcrumbPage>{detail.label}</BreadcrumbPage>
               </BreadcrumbItem>
             </>
           ) : (
@@ -300,6 +303,7 @@ const SidebarAccountPanel = ({
     isSigningOut,
     selectAccount,
     signOut,
+    switchAccount,
   } = useAccountPanel({
     onAccountSwitched: () => {
       setAccountMenuOpen(false);
@@ -418,6 +422,18 @@ const SidebarAccountPanel = ({
 
             <DropdownMenuSeparator inset />
 
+            {demo ? null : (
+              <DropdownMenuItem
+                disabled={isSigningOut || Boolean(switchingAccountId)}
+                onSelect={() => {
+                  void switchAccount();
+                }}
+              >
+                <SidebarNavIcon icon={UserSwitchIcon} />
+                Switch account
+              </DropdownMenuItem>
+            )}
+
             <DropdownMenuItem
               variant="destructive"
               disabled={isSigningOut || Boolean(switchingAccountId)}
@@ -494,10 +510,20 @@ const ServicesSidebarMenuItem = () => {
 
 const useNavFeatures = () => {
   const peopleFeatureQuery = useQuery(peopleFeatureQueryOptions);
-  return { peopleNavEnabled: peopleFeatureQuery.data?.enabled ?? false };
+  const chordChartsFeatureQuery = useQuery(chordChartsFeatureQueryOptions);
+  return {
+    peopleNavEnabled: peopleFeatureQuery.data?.enabled ?? false,
+    songsNavEnabled: chordChartsFeatureQuery.data?.enabled ?? false,
+  };
 };
 
-const AppSidebar = ({ peopleNavEnabled }: { peopleNavEnabled: boolean }) => {
+const AppSidebar = ({
+  peopleNavEnabled,
+  songsNavEnabled,
+}: {
+  peopleNavEnabled: boolean;
+  songsNavEnabled: boolean;
+}) => {
   const pathname = usePathname();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -534,6 +560,18 @@ const AppSidebar = ({ peopleNavEnabled }: { peopleNavEnabled: boolean }) => {
                     >
                       <SidebarNavIcon icon={UsersIcon} />
                       <span>People</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {songsNavEnabled ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/songs" />}
+                      isActive={pathname.startsWith("/songs")}
+                      tooltip="Songs"
+                    >
+                      <SidebarNavIcon icon={MusicNote03Icon} />
+                      <span>Songs</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ) : null}
@@ -662,7 +700,7 @@ export const AppShell = ({ children }: { children: ReactNode }): ReactNode => {
     SIDEBAR_OPEN_STORAGE_KEY
   );
   const sidebarOpen = storedOpen !== "false";
-  const { peopleNavEnabled } = useNavFeatures();
+  const { peopleNavEnabled, songsNavEnabled } = useNavFeatures();
 
   const handleSidebarOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -678,7 +716,10 @@ export const AppShell = ({ children }: { children: ReactNode }): ReactNode => {
       className="min-h-dvh md:h-dvh md:min-h-0 md:overflow-hidden"
     >
       <SidebarToggleHotkey />
-      <AppSidebar peopleNavEnabled={peopleNavEnabled} />
+      <AppSidebar
+        peopleNavEnabled={peopleNavEnabled}
+        songsNavEnabled={songsNavEnabled}
+      />
       <SidebarInset className="md:min-h-0 md:overflow-hidden">
         <AppInsetChromeHeader>
           <SidebarChromeTrigger when="inset" />

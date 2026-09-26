@@ -40,6 +40,12 @@ describe(describeSignInError, () => {
     );
   });
 
+  it("explains an organization that could not be linked", () => {
+    expect(describeSignInError("account_not_linked")).toBe(
+      "We couldn't add this Planning Center organization to your account. Please try again."
+    );
+  });
+
   it("uses generic copy for unknown codes", () => {
     expect(describeSignInError("something_new")).toBe(
       "Something went wrong signing in with Planning Center. Please try again."

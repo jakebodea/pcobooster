@@ -41,6 +41,7 @@ import {
   useHydrateQueryFromCache,
 } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { callForQuery, speculativeQuery } from "@/lib/request-priority";
 import { orpc } from "@/orpc-client";
 
 /**
@@ -80,17 +81,21 @@ export const createPositionCandidatesQueryOptions = ({
     positionId,
     planId
   ),
-  queryFn: async ({
-    signal,
-  }: QueryFunctionContext): Promise<PositionCandidates> => {
-    const candidates = await orpc.people.positionCandidates(
-      {
-        serviceTypeId,
-        positionId,
-        planId,
-        teamId: isNonEmptyString(teamId) ? teamId : undefined,
-      },
-      { signal }
+  queryFn: async (
+    context: QueryFunctionContext
+  ): Promise<PositionCandidates> => {
+    const candidates = await callForQuery(
+      context,
+      async (options) =>
+        await orpc.people.positionCandidates(
+          {
+            serviceTypeId,
+            positionId,
+            planId,
+            teamId: isNonEmptyString(teamId) ? teamId : undefined,
+          },
+          options
+        )
     );
     writeCachedPositionCandidates(
       serviceTypeId,
@@ -110,16 +115,21 @@ type WindowContinuation = NonNullable<
 
 /**
  * Follows the window's continuation until every roster is read. Each call is its own Worker
- * invocation, so each stays within the per-call request budget.
+ * invocation, so each stays within the per-call request budget, and each takes the query's
+ * priority at the time it is sent.
  */
 const fetchPlanWindowHistory = async (
   dateKey: string,
-  signal: AbortSignal,
+  context: QueryFunctionContext,
   continuation?: WindowContinuation
 ): Promise<PlanWindowHistoryBatch[]> => {
-  const batch = await orpc.people.planWindowHistory(
-    { date: dateKey, continuation },
-    { signal }
+  const batch = await callForQuery(
+    context,
+    async (options) =>
+      await orpc.people.planWindowHistory(
+        { date: dateKey, continuation },
+        options
+      )
   );
   const { deferredPlans, deferredServiceTypeIds } = batch;
   if (deferredPlans.length === 0 && deferredServiceTypeIds.length === 0) {
@@ -133,7 +143,7 @@ const fetchPlanWindowHistory = async (
   }
   return [
     batch,
-    ...(await fetchPlanWindowHistory(dateKey, signal, {
+    ...(await fetchPlanWindowHistory(dateKey, context, {
       plans: deferredPlans,
       serviceTypeIds: deferredServiceTypeIds,
     })),
@@ -143,10 +153,10 @@ const fetchPlanWindowHistory = async (
 /** History from the rosters around one plan date; every position and plan on it shares it. */
 export const createPlanWindowHistoryQueryOptions = (dateKey: string) => ({
   queryKey: queryKeys.planWindowHistory(dateKey),
-  queryFn: async ({
-    signal,
-  }: QueryFunctionContext): Promise<PlanWindowHistoryBatch[]> => {
-    const calls = await fetchPlanWindowHistory(dateKey, signal);
+  queryFn: async (
+    context: QueryFunctionContext
+  ): Promise<PlanWindowHistoryBatch[]> => {
+    const calls = await fetchPlanWindowHistory(dateKey, context);
     writeCachedPlanWindowHistory(dateKey, calls);
     return calls;
   },
@@ -166,18 +176,22 @@ interface CandidateDetailsRequest {
  */
 const fetchCandidateDetails = async (
   { personIds, planId, dateKey, scheduleHistory }: CandidateDetailsRequest,
-  signal: AbortSignal,
+  context: QueryFunctionContext,
   blockoutProgress?: CandidateDetailsBatch["blockoutProgress"]
 ): Promise<CandidateDetail[]> => {
-  const batch = await orpc.people.candidateDetails(
-    {
-      personIds: [...personIds],
-      planId,
-      date: dateKey,
-      scheduleHistory,
-      blockoutProgress,
-    },
-    { signal }
+  const batch = await callForQuery(
+    context,
+    async (options) =>
+      await orpc.people.candidateDetails(
+        {
+          personIds: [...personIds],
+          planId,
+          date: dateKey,
+          scheduleHistory,
+          blockoutProgress,
+        },
+        options
+      )
   );
   const deferred = batch.deferredPersonIds;
   if (deferred.length === 0) {
@@ -193,7 +207,7 @@ const fetchCandidateDetails = async (
     ...batch.people,
     ...(await fetchCandidateDetails(
       { personIds: deferred, planId, dateKey, scheduleHistory },
-      signal,
+      context,
       batch.blockoutProgress
     )),
   ];
@@ -208,8 +222,8 @@ export const createCandidateDetailsQueryOptions = (
     request.scheduleHistory ? request.planId : null,
     request.personIds
   ),
-  queryFn: async ({ signal }: QueryFunctionContext) => {
-    const details = await fetchCandidateDetails(request, signal);
+  queryFn: async (context: QueryFunctionContext) => {
+    const details = await fetchCandidateDetails(request, context);
     if (!request.scheduleHistory) {
       writeCachedCandidateAvailability(request.dateKey, details);
     }
@@ -223,32 +237,37 @@ const detailBatchesFor = (candidates: PositionCandidates | undefined) =>
 
 /**
  * Loads a slot's whole candidate list ahead of a click: candidates, then the shared window
- * history and the candidates' details. Cached parts are not fetched again.
+ * history and the candidates' details. Cached parts are not fetched again. Every call is
+ * speculative until the slot's list is on screen.
  */
 export const prefetchPositionCandidates = async (
   queryClient: QueryClient,
   slot: CandidateSlot
 ): Promise<void> => {
   const candidates = await queryClient.query(
-    createPositionCandidatesQueryOptions(slot)
+    speculativeQuery(createPositionCandidatesQueryOptions(slot))
   );
   const detailsFor = async (scheduleHistory: boolean) => {
     await Promise.all(
       detailBatchesFor(candidates).map(
         async (personIds) =>
           await queryClient.query(
-            createCandidateDetailsQueryOptions({
-              personIds,
-              planId: slot.planId,
-              dateKey: slot.dateKey,
-              scheduleHistory,
-            })
+            speculativeQuery(
+              createCandidateDetailsQueryOptions({
+                personIds,
+                planId: slot.planId,
+                dateKey: slot.dateKey,
+                scheduleHistory,
+              })
+            )
           )
       )
     );
   };
   const [windowCalls] = await Promise.all([
-    queryClient.query(createPlanWindowHistoryQueryOptions(slot.dateKey)),
+    queryClient.query(
+      speculativeQuery(createPlanWindowHistoryQueryOptions(slot.dateKey))
+    ),
     detailsFor(false),
   ]);
   if (needsScheduleHistory(windowCalls)) {

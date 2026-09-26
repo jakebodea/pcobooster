@@ -25,6 +25,7 @@ import { useOrganizationTimeZone } from "@/hooks/use-organization-timezone";
 import { createSongOptionsQueryOptions } from "@/hooks/use-song-options";
 import { useSongSearch } from "@/hooks/use-song-search";
 import { isQueryFresh } from "@/lib/intent-prefetch";
+import { speculativeQuery } from "@/lib/request-priority";
 import { formatSongLastScheduled } from "@/lib/song-catalog-client";
 
 interface SongPickerDialogProps {
@@ -68,7 +69,7 @@ export const SongPickerDialog = ({
         return;
       }
       await queryClient.query(
-        createSongOptionsQueryOptions(songId, serviceTypeId)
+        speculativeQuery(createSongOptionsQueryOptions(songId, serviceTypeId))
       );
     },
   });

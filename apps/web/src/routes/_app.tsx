@@ -1,6 +1,7 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/app-shell";
+import { chordChartsFeatureQueryOptions } from "@/lib/chord-charts-route";
 import { peopleFeatureQueryOptions } from "@/lib/people-route";
 
 const AppLayout = () => (
@@ -14,14 +15,14 @@ const AppLayout = () => (
  * browser from its query caches, with its skeleton as the server fallback.
  */
 export const Route = createFileRoute("/_app")({
-  // The navigation shows People only when the flag is on. Loading the answer here renders
-  // the server HTML with it, so the link never flashes.
+  // The navigation shows People and Songs only when their flags are on. Loading the answers
+  // here renders the server HTML with them, so the links never flash.
   loader: async ({ context }) => {
-    try {
-      await context.queryClient.query(peopleFeatureQueryOptions);
-    } catch {
-      // The link stays hidden; the page itself does not depend on the answer.
-    }
+    await Promise.allSettled([
+      // A failed answer keeps its link hidden; the pages do not depend on it.
+      context.queryClient.query(peopleFeatureQueryOptions),
+      context.queryClient.query(chordChartsFeatureQueryOptions),
+    ]);
   },
   headers: () => ({ "Cache-Control": "private, no-store" }),
   // Not-found pages bubble to the root, which renders them inside the shell.

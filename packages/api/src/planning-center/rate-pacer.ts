@@ -1,7 +1,14 @@
 import type { PlanningCenterRateLimitInfo } from "@pcobooster/api/planning-center/api-error";
+import type { RequestPriority } from "@pcobooster/contracts/request-priority";
 
 /** Budget used freely before pacing starts, as a share of the reported limit. */
 const DEFAULT_PACE_FROM_SHARE = 0.5;
+/**
+ * Budget speculative reads may use, as a share of the reported limit. Below the pacing share,
+ * so work nobody is waiting on never takes a paced slot and at least this much of every window
+ * beyond it stays for interactive reads.
+ */
+const DEFAULT_SPECULATIVE_SHARE = 0.4;
 /** Longest an interactive request waits for budget before failing fast. */
 export const DEFAULT_MAX_RATE_LIMIT_WAIT_MS = 5000;
 /** Retry wait after a 429 that names no Retry-After and no known window. */
@@ -56,6 +63,11 @@ export type PlanningCenterPacingDecision =
     }
   | {
       readonly kind: "reject";
+      /**
+       * `budget`: the wait would pass the cap. `speculative`: the rest of the window is kept for
+       * interactive reads; nothing is wrong with the credential.
+       */
+      readonly reason: "budget" | "speculative";
       readonly retryAfterMs: number;
       readonly window: PlanningCenterRateSnapshot;
     };
@@ -65,6 +77,8 @@ export interface PlanningCenterRatePacerOptions {
   readonly paceFromShare?: number;
   /** Longest wait before a read fails fast (default 5 s). */
   readonly maxWaitMs?: number;
+  /** Share of the reported limit speculative reads may use (default 0.4). */
+  readonly speculativeShare?: number;
 }
 
 export interface PlanningCenterRateObservation {
@@ -128,8 +142,11 @@ const learnFromResponse = (
  * limits. Below `paceFromShare` of the limit requests go straight out; above
  * it, concurrent requests take evenly spaced slots that spread the remaining
  * budget over the rest of the window. A wait longer than `maxWaitMs` is
- * rejected so the caller can fail fast. Isolates do not share state, so this
- * cannot prevent 429s caused by another isolate or tab.
+ * rejected so the caller can fail fast. Speculative reads never wait: they go
+ * out only while the window is below `speculativeShare` and nothing is paced,
+ * and are rejected otherwise, so prefetches cannot take budget from what the
+ * user is waiting on. Isolates do not share state, so this cannot prevent 429s
+ * caused by another isolate or tab.
  *
  * Methods are synchronous and take the current time, so callers read the
  * Effect `Clock` and tests can drive time directly.
@@ -137,11 +154,16 @@ const learnFromResponse = (
 export class PlanningCenterRatePacer {
   readonly maxWaitMs: number;
   private readonly paceFromShare: number;
+  private readonly speculativeShare: number;
   private readonly windows = new Map<string, CredentialWindow>();
 
   constructor(options: PlanningCenterRatePacerOptions = {}) {
     this.paceFromShare = options.paceFromShare ?? DEFAULT_PACE_FROM_SHARE;
     this.maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_RATE_LIMIT_WAIT_MS;
+    this.speculativeShare = Math.min(
+      options.speculativeShare ?? DEFAULT_SPECULATIVE_SHARE,
+      this.paceFromShare
+    );
   }
 
   private windowFor(scope: string, now: number): CredentialWindow {
@@ -167,17 +189,21 @@ export class PlanningCenterRatePacer {
   }
 
   /**
-   * Reserves a send slot. Reads may wait or be rejected; writes are never
-   * delayed or rejected here, only counted. Every `send` must be followed by
-   * `complete`.
+   * Reserves a send slot. Reads may wait or be rejected; speculative reads
+   * are sent at once or rejected; writes are never delayed or rejected here,
+   * only counted. Every `send` must be followed by `complete`.
    */
   reserve(
     scope: string,
     now: number,
-    kind: "read" | "write"
+    kind: "read" | "write",
+    priority: RequestPriority = "interactive"
   ): PlanningCenterPacingDecision {
     const window = this.windowFor(scope, now);
-    const decision = this.decide(window, now, kind);
+    const decision =
+      kind === "read" && priority === "speculative"
+        ? this.decideSpeculative(window, now)
+        : this.decide(window, now, kind);
     if (decision.kind === "send") {
       window.inFlight += 1;
     }
@@ -216,12 +242,43 @@ export class PlanningCenterRatePacer {
     if (waitMs > this.maxWaitMs) {
       return {
         kind: "reject",
+        reason: "budget",
         retryAfterMs: waitMs,
         window: snapshotOf(window),
       };
     }
     window.nextSlotAt = earliest + spacingMs;
     return { kind: "send", waitMs, window: snapshotOf(window) };
+  }
+
+  private decideSpeculative(
+    window: CredentialWindow,
+    now: number
+  ): PlanningCenterPacingDecision {
+    const { limit } = window;
+    if (limit === undefined || window.periodMs === undefined) {
+      // Nothing is known about this credential yet; the first response teaches the window.
+      return { kind: "send", waitMs: 0, window: snapshotOf(window) };
+    }
+    const used = window.reportedCount + window.inFlight;
+    const interactiveQueued = window.nextSlotAt > now;
+    if (
+      window.blockedUntil <= now &&
+      !interactiveQueued &&
+      used < limit * this.speculativeShare
+    ) {
+      return { kind: "send", waitMs: 0, window: snapshotOf(window) };
+    }
+    return {
+      kind: "reject",
+      reason: "speculative",
+      retryAfterMs: Math.max(
+        window.windowEndsAt - now,
+        window.blockedUntil - now,
+        0
+      ),
+      window: snapshotOf(window),
+    };
   }
 
   /** Releases a reservation and learns from the response's rate headers, if any. */

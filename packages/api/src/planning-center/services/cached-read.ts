@@ -1,5 +1,7 @@
+import { currentRequestPriority } from "@pcobooster/api/planning-center/accounting";
 import { isPlanningCenterError } from "@pcobooster/api/planning-center/core-client";
 import type { PlanningCenterError } from "@pcobooster/api/planning-center/core-client";
+import { PlanningCenterRateLimitError } from "@pcobooster/api/planning-center/rate-limit-error";
 import type { PlanningCenterReadCache } from "@pcobooster/api/planning-center/services/read-cache";
 import { Cause, Effect, Exit } from "effect";
 
@@ -23,13 +25,12 @@ const settleLoad = <Value>(
     : new Error("Planning Center read failed", { cause: defect });
 };
 
-/**
- * Reads through a shared cache; `load` is only built on a miss. Each caller
- * waits on its own fiber, so interrupting one caller leaves the load running
- * for the others; the load is interrupted, and nothing is cached, once no
- * callers remain.
- */
-export const cachedRead = <Value>(
+const isHeldBackSpeculativeRead = (error: PlanningCenterError): boolean =>
+  error instanceof PlanningCenterRateLimitError &&
+  error.reason === "speculative";
+
+/** One pass through the cache; a joined load's failure is this caller's failure. */
+const readThrough = <Value>(
   cache: PlanningCenterReadCache<Value>,
   key: string,
   ttlMs: number,
@@ -52,3 +53,31 @@ export const cachedRead = <Value>(
       )
     );
   });
+
+/**
+ * Reads through a shared cache; `load` is only built on a miss. Each caller
+ * waits on its own fiber, so interrupting one caller leaves the load running
+ * for the others; the load is interrupted, and nothing is cached, once no
+ * callers remain.
+ *
+ * A load runs with the priority of the procedure that started it. When an
+ * interactive caller joined a speculative load that the pacer held back, it
+ * loads again with its own priority instead of failing with the prefetch.
+ */
+export const cachedRead = <Value>(
+  cache: PlanningCenterReadCache<Value>,
+  key: string,
+  ttlMs: number,
+  load: () => Effect.Effect<Value, PlanningCenterError>
+): Effect.Effect<Value, PlanningCenterError> => {
+  const read = readThrough(cache, key, ttlMs, load);
+  return Effect.catchIf(read, isHeldBackSpeculativeRead, (heldBack) =>
+    Effect.gen(function* loadForInteractiveCaller() {
+      const priority = yield* currentRequestPriority;
+      if (priority === "speculative") {
+        return yield* Effect.fail(heldBack);
+      }
+      return yield* read;
+    })
+  );
+};

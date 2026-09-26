@@ -51,6 +51,18 @@ const signOutSession = async () => {
   }
 };
 
+/** Leaves the account signed in on this browser so the sign-in page can resume it. */
+const leaveSession = async () => {
+  // Better Auth rejects a POST without a JSON content type, so send an empty body.
+  const result = await authClient.$fetch("/device-accounts/leave", {
+    method: "POST",
+    body: {},
+  });
+  if (result.error) {
+    throw new Error(result.error.message ?? "Unable to switch accounts");
+  }
+};
+
 const exitDemoSession = async () => {
   await orpc.demo.exit({});
 };
@@ -107,14 +119,20 @@ export const useAccountPanel = ({
     setSwitchingAccountId(null);
   };
 
-  const signOut = async () => {
+  const signOut = async ({ keepOnDevice = false } = {}) => {
     if (isSigningOut || switchingAccountId !== null) {
       return;
     }
     setActionError("");
     setIsSigningOut(true);
     try {
-      await (demo ? exitDemoSession() : signOutSession());
+      if (demo) {
+        await exitDemoSession();
+      } else if (keepOnDevice) {
+        await leaveSession();
+      } else {
+        await signOutSession();
+      }
       resetAnalytics();
       queryClient.clear();
       clearAccountScopedCaches();
@@ -142,5 +160,8 @@ export const useAccountPanel = ({
     isSigningOut,
     selectAccount,
     signOut,
+    switchAccount: async () => {
+      await signOut({ keepOnDevice: true });
+    },
   };
 };

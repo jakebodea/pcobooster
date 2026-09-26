@@ -55,6 +55,7 @@ describe(accountPlanningCenterProcedure, () => {
         fields: {
           procedure: "people.planWindowHistory",
           requestId: "request-1",
+          priority: "interactive",
           durationMs: 25,
           outcome: "success",
           planningCenter: {
@@ -107,6 +108,29 @@ describe(accountPlanningCenterProcedure, () => {
       cap: PLANNING_CENTER_REQUEST_CAP,
       requestBudget: received?.requestBudget,
     }).toStrictEqual({ cap: 40, requestBudget: 40 });
+  });
+
+  it("gives the pacer and the summary the browser's priority", async () => {
+    const { lines, logger } = recordingLogger();
+    let received: PlanningCenterRequestAccounting | undefined;
+    await accountPlanningCenterProcedure(
+      { ...procedure, priority: "speculative" },
+      async (accounting) => {
+        received = accounting;
+        accounting.recordRateLimitRejection();
+        await Promise.resolve();
+      },
+      { logger }
+    );
+    expect(received?.priority).toBe("speculative");
+    expect(lines).toMatchObject([
+      {
+        fields: {
+          priority: "speculative",
+          planningCenter: { requests: 0, rateLimitRejections: 1 },
+        },
+      },
+    ]);
   });
 
   it("stays quiet for procedures that never called Planning Center", async () => {

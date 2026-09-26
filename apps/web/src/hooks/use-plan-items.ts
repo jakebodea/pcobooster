@@ -10,6 +10,7 @@ import {
 } from "@/lib/plan-items-cache";
 import { useHydrateQueryFromCache } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { callForQuery } from "@/lib/request-priority";
 import { orpc } from "@/orpc-client";
 
 const PLAN_ITEMS_STALE_TIME_MS = 60 * 1000;
@@ -19,14 +20,15 @@ export const createPlanItemsQueryOptions = (
   planId: string | null
 ) => ({
   queryKey: queryKeys.planItems(serviceTypeId, planId),
-  queryFn: async ({ signal }: QueryFunctionContext) => {
+  queryFn: async (context: QueryFunctionContext) => {
     if (!isNonEmptyString(serviceTypeId) || !isNonEmptyString(planId)) {
       return [];
     }
 
-    const items = await orpc.planItems.list(
-      { serviceTypeId, planId },
-      { signal }
+    const items = await callForQuery(
+      context,
+      async (options) =>
+        await orpc.planItems.list({ serviceTypeId, planId }, options)
     );
     writeCachedPlanItems(serviceTypeId, planId, items);
     return items;

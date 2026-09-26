@@ -47,6 +47,14 @@ const SIGN_IN_ERROR_MESSAGES = new Map([
     "We couldn't read your Planning Center profile. Please try again.",
   ],
   [
+    "account_not_linked",
+    "We couldn't add this Planning Center organization to your account. Please try again.",
+  ],
+  [
+    "account_already_linked_to_different_user",
+    "This Planning Center login is already connected to a different PCOBooster account.",
+  ],
+  [
     "email_not_found",
     "Your Planning Center profile needs an email address to sign in.",
   ],

@@ -153,6 +153,98 @@ describe(createIntentPrefetcher, () => {
   });
 });
 
+/** A lane that holds every task until the test opens it. */
+const heldLane = () => {
+  const turns: { task: () => Promise<void>; signal: AbortSignal }[] = [];
+  const schedule = async (task: () => Promise<void>, signal: AbortSignal) => {
+    turns.push({ task, signal });
+    await Promise.resolve();
+  };
+  const open = async () => {
+    await Promise.all(
+      turns
+        .splice(0)
+        .filter(({ signal }) => !signal.aborted)
+        .map(async ({ task }) => {
+          await task();
+        })
+    );
+  };
+  return { schedule, open };
+};
+
+describe("intent prefetches waiting in a lane", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const setupWithLane = (fresh = new Set<string>()) => {
+    const calls: string[] = [];
+    const lane = heldLane();
+    const prefetcher = createIntentPrefetcher<string>({
+      dwellMs: INTENT_PREFETCH_DWELL_MS,
+      keyOf: (id) => id,
+      isFresh: (id) => fresh.has(id),
+      prefetch: async (id) => {
+        calls.push(id);
+        await Promise.resolve();
+      },
+      schedule: lane.schedule,
+    });
+    return { calls, lane, prefetcher };
+  };
+
+  it("waits for its turn before prefetching", async () => {
+    const { calls, lane, prefetcher } = setupWithLane();
+
+    prefetcher.start("a");
+    await vi.advanceTimersByTimeAsync(INTENT_PREFETCH_DWELL_MS);
+    expect(calls).toStrictEqual([]);
+
+    await lane.open();
+    expect(calls).toStrictEqual(["a"]);
+  });
+
+  it("replaces a waiting prefetch with the newer intent", async () => {
+    const { calls, lane, prefetcher } = setupWithLane();
+
+    prefetcher.start("a");
+    await vi.advanceTimersByTimeAsync(INTENT_PREFETCH_DWELL_MS);
+    prefetcher.start("b");
+    await vi.advanceTimersByTimeAsync(INTENT_PREFETCH_DWELL_MS);
+    await lane.open();
+
+    expect(calls).toStrictEqual(["b"]);
+  });
+
+  it("drops a waiting prefetch on cancel, as when the row is opened", async () => {
+    const { calls, lane, prefetcher } = setupWithLane();
+
+    prefetcher.start("a");
+    await vi.advanceTimersByTimeAsync(INTENT_PREFETCH_DWELL_MS);
+    prefetcher.cancel();
+    await lane.open();
+
+    expect(calls).toStrictEqual([]);
+  });
+
+  it("skips a target that loaded while its prefetch waited", async () => {
+    const fresh = new Set<string>();
+    const { calls, lane, prefetcher } = setupWithLane(fresh);
+
+    prefetcher.start("a");
+    await vi.advanceTimersByTimeAsync(INTENT_PREFETCH_DWELL_MS);
+    fresh.add("a");
+    await lane.open();
+
+    expect(calls).toStrictEqual([]);
+  });
+});
+
 describe(isQueryFresh, () => {
   const queryKey = ["people-dashboard-person", "1", null];
   const staleTime = 60_000;

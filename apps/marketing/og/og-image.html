@@ -1,0 +1,216 @@
+<!doctype html>
+<!--
+  Source for the social preview images in ../public (og-home.png, og-about.png).
+  Render at 1200x630 from the repo root, for example:
+    chrome --headless --hide-scrollbars --window-size=1200,630 \
+      --screenshot=apps/marketing/public/og-home.png "file://$PWD/apps/marketing/og/og-image.html#home"
+  Use #about for og-about.png. assign-electric-guitar.png is the marketing demo (localhost:3002)
+  with Electric Guitar selected, captured at 2x.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link
+      rel="stylesheet"
+      href="../../../packages/design-tokens/src/tokens.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&display=block"
+    />
+    <style>
+      /* Product colors come from tokens.css; these marketing-only surfaces mirror src/styles/globals.css. */
+      :root {
+        --logo: #73866d;
+        --brand: oklch(0.47 0.075 150);
+        --brand-soft: oklch(0.905 0.035 146);
+        --stage: oklch(0.925 0.018 142);
+      }
+      * {
+        margin: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+      }
+      body {
+        background: var(--stage);
+        font-family: Inter, sans-serif;
+        color: var(--foreground);
+        position: relative;
+      }
+      .copy {
+        position: absolute;
+        left: 72px;
+        top: 64px;
+        bottom: 60px;
+        width: 540px;
+        display: flex;
+        flex-direction: column;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 30px;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+      }
+      .brand svg {
+        width: 52px;
+        height: 52px;
+      }
+      h1 {
+        margin-top: auto;
+        font-size: 60px;
+        line-height: 1.06;
+        font-weight: 700;
+        letter-spacing: -0.035em;
+      }
+      h1 em {
+        font-style: normal;
+        color: var(--brand);
+      }
+      p {
+        margin-top: 24px;
+        font-size: 25px;
+        line-height: 1.4;
+        color: var(--muted-foreground);
+        letter-spacing: -0.01em;
+      }
+      .url {
+        margin-top: auto;
+        padding-top: 28px;
+        font-size: 20px;
+        font-weight: 550;
+        color: var(--logo);
+      }
+      .shot {
+        position: absolute;
+        left: 627px;
+        top: 160px;
+        width: 527px;
+        height: 308px;
+        border-radius: 22px;
+        overflow: hidden;
+        background: var(--background);
+        border: 1px solid var(--border);
+        box-shadow: 0 30px 60px -20px oklch(0.27 0.018 142 / 0.28);
+      }
+      /* The capture is 2400px wide (2x); this shows the Electric Guitar candidate list, Add buttons included. The heading icon is added for the preview only. */
+      .shot img {
+        position: absolute;
+        width: 972px;
+        left: -393px;
+        top: -128px;
+      }
+      .mark {
+        position: absolute;
+        right: -40px;
+        top: 50%;
+        translate: 0 -50%;
+        width: 560px;
+        height: 560px;
+        border-radius: 50%;
+        background: var(--brand-soft);
+        display: grid;
+        place-items: center;
+      }
+      .mark svg {
+        width: 340px;
+        height: 340px;
+      }
+      body:not(.home) .shot,
+      body:not(.about) .mark,
+      body:not(.home) .only-home,
+      body:not(.about) .only-about {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute">
+      <defs>
+        <mask
+          id="fin-clearance"
+          maskUnits="userSpaceOnUse"
+          x="0"
+          y="0"
+          width="256"
+          height="256"
+        >
+          <rect width="256" height="256" fill="white" />
+          <path
+            d="M121 103C158 89 196 100 219 122Q225 128 219 134C196 156 158 167 121 153Q112 149 112 140V116Q112 107 121 103Z"
+            fill="black"
+            stroke="black"
+            stroke-width="12"
+            stroke-linejoin="round"
+          />
+        </mask>
+        <mask
+          id="rocket-window"
+          maskUnits="userSpaceOnUse"
+          x="0"
+          y="0"
+          width="256"
+          height="256"
+        >
+          <rect width="256" height="256" fill="white" />
+          <circle cx="176" cy="128" r="13" fill="black" />
+        </mask>
+        <g
+          id="rocket"
+          transform="translate(128 128) rotate(-45) scale(1.12) translate(-128 -128)"
+          fill="#73866d"
+        >
+          <g mask="url(#fin-clearance)">
+            <path d="M150 104C137 90 127 83 118 82Q112 82 112 89V104Z" />
+            <path d="M150 152C137 166 127 173 118 174Q112 174 112 167V152Z" />
+          </g>
+          <path
+            d="M121 103C158 89 196 100 219 122Q225 128 219 134C196 156 158 167 121 153Q112 149 112 140V116Q112 107 121 103Z"
+            mask="url(#rocket-window)"
+          />
+          <rect x="71" y="104" width="33" height="12" rx="6" />
+          <rect x="65" y="122" width="33" height="12" rx="6" />
+          <rect x="71" y="140" width="33" height="12" rx="6" />
+          <circle cx="59" cy="110" r="6" />
+          <circle cx="53" cy="128" r="6" />
+          <circle cx="59" cy="146" r="6" />
+        </g>
+      </defs>
+    </svg>
+
+    <div class="copy">
+      <div class="brand">
+        <svg viewBox="46 42 168 168"><use href="#rocket" /></svg>PCOBooster
+      </div>
+      <h1 class="only-home">
+        Build your next lineup with <em>the full picture.</em>
+      </h1>
+      <p class="only-home">
+        Availability, serving history, and open positions for Planning Center
+        Services.
+      </p>
+      <h1 class="only-about">
+        Built for the people who <em>bring the team together.</em>
+      </h1>
+      <p class="only-about">The story behind PCOBooster.</p>
+      <div class="url only-home">pcobooster.com</div>
+      <div class="url only-about">pcobooster.com/about</div>
+    </div>
+
+    <div class="shot"><img src="assign-electric-guitar.png" alt="" /></div>
+    <div class="mark">
+      <svg viewBox="46 42 168 168"><use href="#rocket" /></svg>
+    </div>
+
+    <script>
+      document.body.className = location.hash.slice(1) || "home";
+    </script>
+  </body>
+</html>

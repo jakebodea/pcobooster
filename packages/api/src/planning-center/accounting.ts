@@ -1,4 +1,5 @@
 import type { PlanningCenterRequestAccounting } from "@pcobooster/api/planning-center/request-accounting";
+import type { RequestPriority } from "@pcobooster/contracts/request-priority";
 import { Context, Effect, Option } from "effect";
 
 /**
@@ -17,3 +18,9 @@ export const currentPlanningCenterRequestCount: Effect.Effect<
 > = Effect.map(Effect.serviceOption(PlanningCenterAccounting), (accounting) =>
   Option.isSome(accounting) ? accounting.value.requestCount : undefined
 );
+
+/** Who waits on the current procedure; code outside a procedure is interactive. */
+export const currentRequestPriority: Effect.Effect<RequestPriority> =
+  Effect.map(Effect.serviceOption(PlanningCenterAccounting), (accounting) =>
+    Option.isSome(accounting) ? accounting.value.priority : "interactive"
+  );

@@ -39,6 +39,7 @@ import type {
   PeopleDashboardData,
   PeopleDashboardScope,
 } from "@/lib/people-dashboard";
+import { speculativeQuery } from "@/lib/request-priority";
 import { computeTeamHealth } from "@/lib/team-health";
 import type { TeamMember } from "@/lib/team-health";
 
@@ -262,7 +263,9 @@ export const PeoplePage = () => {
         params: { personId: person.id },
       });
       await queryClient.query(
-        createPeopleDashboardPersonQueryOptions(person.id, null)
+        speculativeQuery(
+          createPeopleDashboardPersonQueryOptions(person.id, null)
+        )
       );
     },
     [queryClient, router]

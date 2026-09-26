@@ -79,6 +79,7 @@ The account is on Cloudflare Workers Free: each Worker invocation may make at mo
 - Treat the budget as explicit: when a procedure cannot finish within it, return partial data with a continuation cursor. Never swallow a subrequest or rate-limit failure into empty data.
 - Fetch less per call: prefer Planning Center `include`, filters (such as future-only blockouts), and a person's own records over scanning every roster. Cache slow-changing data (past plans, service types) longer.
 - Prefetch only on clear intent (click, or a debounced hover); never run Planning Center fan-out on incidental pointer movement.
+- Load what the user is waiting on first. Anything not on screen yet (hover prefetches, other tabs' data, warm-ups) is speculative: queue it with `requestScheduler.runSpeculative` (or `useIntentPrefetch`), mark its queries with `speculativeQuery`, and call oRPC from query functions through `callForQuery`. See [Request priority](docs/api-architecture.md#request-priority).
 - Log per-procedure request counts, rate-limit pauses, and 429s at `info` so Workers Logs shows which screens approach the limits.
 
 ## Architecture Notes

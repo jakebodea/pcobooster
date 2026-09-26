@@ -30,3 +30,8 @@ export const planWorkspaceSearchSchema = z.object({
 export const personSearchSchema = z.object({
   month: optionalParam,
 });
+
+/** Song chord chart: the arrangement being edited; unknown ids fall back to the first. */
+export const songChartSearchSchema = z.object({
+  arrangement: optionalParam,
+});

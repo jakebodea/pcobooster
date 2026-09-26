@@ -1,5 +1,7 @@
+import { deviceAccounts } from "@pcobooster/api/auth/device-accounts";
 import { getPlanningCenterIdentityFromAccessToken } from "@pcobooster/api/auth/planning-center-identity";
 import { createPreviewProxy } from "@pcobooster/api/auth/preview-proxy";
+import { parseSignInFailure } from "@pcobooster/api/auth/sign-in-failure";
 import type { ServerConfig } from "@pcobooster/api/config/server-config";
 import {
   getActivityRequestContext,
@@ -14,6 +16,7 @@ import { getPostHogPersonProperties } from "@pcobooster/api/modules/analytics/po
 import type { JsonObject } from "@pcobooster/planning-center-models/json";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { genericOAuth } from "better-auth/plugins/generic-oauth";
 
 const SESSION_COOKIE_CACHE_SECONDS = 5 * 60;
@@ -50,11 +53,13 @@ export const createAuth = (config: ServerConfig, database: Db) => {
     eventType:
       | "auth_session_created"
       | "auth_session_deleted"
-      | "auth_account_linked",
+      | "auth_account_linked"
+      | "auth_sign_in_failed",
     payload: {
       userId?: string | null;
       accountId?: string | null;
       metadata?: JsonObject;
+      errorCode?: string | null;
       person?: PostHogPersonProperties | null;
       context: Parameters<typeof getActivityRequestContext>[0];
     }
@@ -72,8 +77,10 @@ export const createAuth = (config: ServerConfig, database: Db) => {
           method: requestContext.method,
           ipAddress: requestContext.ipAddress,
           userAgent: requestContext.userAgent,
-          success: true,
+          success:
+            payload.errorCode === undefined || payload.errorCode === null,
           statusCode: 200,
+          errorCode: payload.errorCode ?? null,
           metadata: payload.metadata ?? null,
         },
         payload.person ?? null
@@ -156,6 +163,11 @@ export const createAuth = (config: ServerConfig, database: Db) => {
         enabled: true,
         trustedProviders: ["planning-center"],
         updateUserInfoOnLink: true,
+        // Each Planning Center organization signs in as its own subject with the same email, and
+        // its userinfo has no `email_verified` claim, so every user is stored unverified. Planning
+        // Center is the only way to create a user here, so the local email is Planning Center's
+        // own and linking another organization to it is safe.
+        requireLocalEmailVerified: false,
       },
     },
     databaseHooks: {
@@ -208,8 +220,36 @@ export const createAuth = (config: ServerConfig, database: Db) => {
         },
       },
     },
+    hooks: {
+      // Better Auth reports a failed provider callback only as a `?error=` redirect.
+      after: createAuthMiddleware(async (ctx) => {
+        if (!ctx.path.startsWith("/callback/")) {
+          return;
+        }
+        const failure = parseSignInFailure(
+          ctx.context.responseHeaders?.get("location")
+        );
+        if (failure === null) {
+          return;
+        }
+        authEventLog.warn(
+          {
+            code: failure.code,
+            receivedCode: failure.receivedCode,
+            description: failure.description,
+          },
+          "Planning Center sign-in failed"
+        );
+        await recordAuthEventSafely("auth_sign_in_failed", {
+          errorCode: failure.receivedCode,
+          metadata: { code: failure.code },
+          context: ctx,
+        });
+      }),
+    },
     socialProviders: {},
     plugins: [
+      deviceAccounts(database),
       genericOAuth({
         config: [
           {

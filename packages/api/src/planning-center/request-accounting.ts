@@ -1,5 +1,6 @@
 import type { PlanningCenterRateLimitInfo } from "@pcobooster/api/planning-center/api-error";
 import type { PlanningCenterRateSnapshot } from "@pcobooster/api/planning-center/rate-pacer";
+import type { RequestPriority } from "@pcobooster/contracts/request-priority";
 
 /** A request's path and query parameter names; never values, tokens, or bodies. */
 export interface PlanningCenterEndpoint {
@@ -12,6 +13,7 @@ export interface PlanningCenterRequestLogFields {
   readonly endpoint: PlanningCenterEndpoint;
   readonly method: string;
   readonly attempt?: number;
+  readonly priority?: RequestPriority;
   readonly waitMs?: number;
   readonly retryAfterMs?: number;
   readonly retryAfterSeconds?: number;
@@ -26,6 +28,7 @@ export interface PlanningCenterRequestLogFields {
 export interface PlanningCenterProcedureSummary {
   readonly procedure: string;
   readonly requestId: string;
+  readonly priority: RequestPriority;
   readonly durationMs: number;
   readonly outcome: "success" | "failure";
 }
@@ -68,6 +71,8 @@ export interface PlanningCenterRequestAccountingOptions {
    * fails with `PlanningCenterSubrequestLimitError`. Omit for no limit.
    */
   readonly requestBudget?: number;
+  /** Who waits on this invocation; the pacer holds back speculative reads. Default interactive. */
+  readonly priority?: RequestPriority;
 }
 
 /**
@@ -77,6 +82,7 @@ export interface PlanningCenterRequestAccountingOptions {
  */
 export class PlanningCenterRequestAccounting {
   readonly requestBudget: number | undefined;
+  readonly priority: RequestPriority;
   private requests = 0;
   private pacedRequests = 0;
   private pacedWaitMs = 0;
@@ -87,6 +93,7 @@ export class PlanningCenterRequestAccounting {
 
   constructor(options: PlanningCenterRequestAccountingOptions = {}) {
     this.requestBudget = options.requestBudget;
+    this.priority = options.priority ?? "interactive";
   }
 
   get requestCount(): number {

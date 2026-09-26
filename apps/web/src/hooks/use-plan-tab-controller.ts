@@ -34,6 +34,7 @@ import {
 } from "@/lib/plan-items-query-state";
 import type { PlanItemsOptimisticSnapshot } from "@/lib/plan-items-query-state";
 import { queryKeys } from "@/lib/query-keys";
+import { requestScheduler, speculativeQuery } from "@/lib/request-priority";
 import { orpc } from "@/orpc-client";
 
 interface UsePlanTabControllerArgs {
@@ -96,7 +97,7 @@ export const usePlanTabController = ({
       }
       try {
         await queryClient.query(
-          createSongOptionsQueryOptions(songId, serviceTypeId)
+          speculativeQuery(createSongOptionsQueryOptions(songId, serviceTypeId))
         );
       } catch {
         // Interactive song queries surface failures; prefetching is best effort.
@@ -105,24 +106,20 @@ export const usePlanTabController = ({
     [queryClient, serviceTypeId]
   );
 
+  // The plan's songs' keys and arrangements (about 3 Planning Center requests each) load
+  // one song at a time in the speculative lane, after the run sheet itself.
   useEffect(() => {
     const songIds = isNonEmptyString(serviceTypeId)
       ? collectPlanSongOptionPrefetchIds(items)
       : [];
-
-    const timers = songIds.map((songId, index) =>
-      window.setTimeout(
-        () => {
-          void prefetchSongOptions(songId);
-        },
-        450 + index * 150
-      )
-    );
-
+    const leave = new AbortController();
+    for (const songId of songIds) {
+      void requestScheduler.runSpeculative(async () => {
+        await prefetchSongOptions(songId);
+      }, leave.signal);
+    }
     return () => {
-      for (const timer of timers) {
-        window.clearTimeout(timer);
-      }
+      leave.abort();
     };
   }, [items, prefetchSongOptions, serviceTypeId]);
 

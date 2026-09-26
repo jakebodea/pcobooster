@@ -651,6 +651,115 @@ describe("Planning Center pacing and accounting", () => {
     });
   });
 
+  it("holds a speculative read back without sending it once the window is mostly used", async () => {
+    const fetch = fetchMock().mockImplementation(
+      async () =>
+        await Promise.resolve(
+          jsonResponse(
+            { data: person },
+            {
+              headers: {
+                "x-pco-api-request-rate-limit": "100",
+                "x-pco-api-request-rate-count": "45",
+                "x-pco-api-request-rate-period": "20 seconds",
+              },
+            }
+          )
+        )
+    );
+    const { lines, logger } = recordingLogger();
+    const pacer = new PlanningCenterRatePacer();
+    const client = pacedClient(fetch, logger);
+    const interactive = limits(new PlanningCenterRequestAccounting(), pacer);
+    const speculative = limits(
+      new PlanningCenterRequestAccounting({ priority: "speculative" }),
+      pacer
+    );
+
+    await Effect.runPromise(
+      client.fetch("/services/v2/people/1").pipe(withLimits(interactive))
+    );
+    await expect(
+      failureOf(
+        client.fetch("/services/v2/people/2").pipe(withLimits(speculative))
+      )
+    ).resolves.toMatchObject({
+      _tag: "PlanningCenterRateLimitError",
+      reason: "speculative",
+    });
+    // The same read from an interactive procedure still goes out.
+    await Effect.runPromise(
+      client.fetch("/services/v2/people/2").pipe(withLimits(interactive))
+    );
+    expect({
+      fetches: fetch.mock.calls.length,
+      speculative: speculative.accounting.totals,
+      lastLine: lines.at(-1),
+    }).toMatchObject({
+      fetches: 2,
+      speculative: { requests: 0, rateLimitRejections: 1 },
+      lastLine: {
+        level: "info",
+        message:
+          "Planning Center speculative request held back: budget kept for interactive requests",
+        fields: { priority: "speculative" },
+      },
+    });
+  });
+
+  it("does not release another read's slot when a speculative read is held back", async () => {
+    const rateHeaders = {
+      "x-pco-api-request-rate-limit": "100",
+      "x-pco-api-request-rate-count": "45",
+      "x-pco-api-request-rate-period": "20 seconds",
+    };
+    const { promise: pending, resolve: answerPending } =
+      Promise.withResolvers<Response>();
+    const fetch = fetchMock()
+      .mockResolvedValueOnce(
+        jsonResponse({ data: person }, { headers: rateHeaders })
+      )
+      .mockReturnValueOnce(pending);
+    const { lines, logger } = recordingLogger();
+    const pacer = new PlanningCenterRatePacer();
+    const client = pacedClient(fetch, logger);
+    const interactive = limits(new PlanningCenterRequestAccounting(), pacer);
+    const speculative = limits(
+      new PlanningCenterRequestAccounting({ priority: "speculative" }),
+      pacer
+    );
+
+    await Effect.runPromise(
+      client.fetch("/services/v2/people/1").pipe(withLimits(interactive))
+    );
+    const inFlightRead = Effect.runPromise(
+      client.fetch("/services/v2/people/2").pipe(withLimits(interactive))
+    );
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+    await expect(
+      failureOf(
+        client.fetch("/services/v2/people/3").pipe(withLimits(speculative))
+      )
+    ).resolves.toMatchObject({ reason: "speculative" });
+    await expect(
+      failureOf(
+        client.fetch("/services/v2/people/4").pipe(withLimits(speculative))
+      )
+    ).resolves.toMatchObject({ reason: "speculative" });
+    answerPending(jsonResponse({ data: person }, { headers: rateHeaders }));
+    await inFlightRead;
+
+    // Each held-back read still sees the one interactive read in flight.
+    expect(
+      lines.filter((line) => line.fields?.priority === "speculative")
+    ).toMatchObject([
+      { fields: { rateLimit: { inFlight: 1 } } },
+      { fields: { rateLimit: { inFlight: 1 } } },
+    ]);
+  });
+
   it("retries a short Retry-After once, without pacing the retry again", async () => {
     const fetch = fetchMock()
       .mockResolvedValueOnce(

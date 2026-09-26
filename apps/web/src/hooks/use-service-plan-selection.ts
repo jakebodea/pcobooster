@@ -16,12 +16,12 @@ import { useIntentPrefetch } from "@/hooks/use-intent-prefetch";
 import { useMyScheduledPlans } from "@/hooks/use-my-scheduled-plans";
 import { useOrganizationTimeZone } from "@/hooks/use-organization-timezone";
 import { createPlanItemsQueryOptions } from "@/hooks/use-plan-items";
-import { createPlanWindowHistoryQueryOptions } from "@/hooks/use-position-candidates";
 import { useServiceTypes } from "@/hooks/use-service-types";
 import { createTeamPositionsQueryOptions } from "@/hooks/use-team-positions";
 import { isQueryFresh } from "@/lib/intent-prefetch";
 import { hydrateQueryFromCache } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { speculativeQuery } from "@/lib/request-priority";
 import {
   readCachedPlansEntry,
   writeCachedPlans,
@@ -270,6 +270,7 @@ export const useServicePlanSelection = ({
     }
   }, [planQueries, serviceTypes]);
 
+  /** On hover: the positions list the plan opens on, and the Plan tab's items. */
   const prefetchPlanData = useCallback(
     async (row: ServicePlanRow) => {
       // Warm the route too, so its code is ready before the click.
@@ -278,14 +279,18 @@ export const useServicePlanSelection = ({
       );
       await Promise.allSettled([
         queryClient.query(
-          createTeamPositionsQueryOptions(
-            row.serviceTypeId,
-            row.planId,
-            row.seriesId
+          speculativeQuery(
+            createTeamPositionsQueryOptions(
+              row.serviceTypeId,
+              row.planId,
+              row.seriesId
+            )
           )
         ),
         queryClient.query(
-          createPlanItemsQueryOptions(row.serviceTypeId, row.planId)
+          speculativeQuery(
+            createPlanItemsQueryOptions(row.serviceTypeId, row.planId)
+          )
         ),
       ]);
     },
@@ -319,18 +324,21 @@ export const useServicePlanSelection = ({
       prefetch: prefetchPlanData,
     });
   /**
-   * Loads the plan-window history (up to about 40 Planning Center requests cold) that the
-   * Assign view scores candidates with, and that every position on the plan shares. It runs
-   * only when a plan is opened, never on hover.
+   * Opening a plan lands on its positions list, so that starts loading at the click, ahead of
+   * the route's code. The workspace warms the rest in the speculative lane once it has loaded.
    */
-  const warmPeopleHistory = useCallback(
+  const loadOpenedPlan = useCallback(
     async (row: ServicePlanRow) => {
       try {
         await queryClient.query(
-          createPlanWindowHistoryQueryOptions(row.sortDate.toISOString())
+          createTeamPositionsQueryOptions(
+            row.serviceTypeId,
+            row.planId,
+            row.seriesId
+          )
         );
       } catch {
-        /* The Assign view's own query owns any visible loading error. */
+        // The workspace's own query owns any visible loading error.
       }
     },
     [queryClient]
@@ -339,14 +347,13 @@ export const useServicePlanSelection = ({
   const handleSelectRow = useCallback(
     (row: ServicePlanRow) => {
       cancelIntent();
-      void prefetchPlanData(row);
-      void warmPeopleHistory(row);
+      void loadOpenedPlan(row);
       onSelect({
         serviceTypeId: row.serviceTypeId,
         planId: row.planId,
       });
     },
-    [cancelIntent, onSelect, prefetchPlanData, warmPeopleHistory]
+    [cancelIntent, loadOpenedPlan, onSelect]
   );
 
   return {

@@ -112,6 +112,11 @@ export default Alchemy.Stack(
         API: api,
         ADMIN: admin,
         PRODUCT_ORIGIN: publicOrigin,
+        // The deployed commit, served at `/version` for post-deploy verification. As an env
+        // prop it is part of the Worker's change hash, so every commit redeploys it.
+        PCOBOOSTER_VERSION: Config.String("GITHUB_SHA").pipe(
+          Config.withDefault("")
+        ),
         // Local stage only, like the API's; production builds ignore it regardless.
         DEV_AUTH_BYPASS: local
           ? Config.String("DEV_AUTH_BYPASS").pipe(Config.withDefault(""))

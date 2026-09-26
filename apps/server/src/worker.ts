@@ -47,8 +47,8 @@ const readEnvironment = Effect.gen(function* readEnvironment() {
   const environment: Omit<ServerEnvironment, "BETTER_AUTH_SECRET"> = {
     NODE_ENV: local ? "development" : "production",
     APP_ENV: production ? "production" : "preview",
-    // CI deploys the checked-out commit; post-deploy verification expects it from health.
-    PCOBOOSTER_VERSION: yield* optionalString("GITHUB_SHA"),
+    // Bound as a Worker prop (`apiProps`); see there for why it is not read from GITHUB_SHA here.
+    PCOBOOSTER_VERSION: yield* optionalString("PCOBOOSTER_VERSION"),
     BETTER_AUTH_URL: publicOrigin,
     AUTH_COOKIE_DOMAIN: production ? "pcobooster.com" : "",
     OAUTH_PREVIEW_ORIGIN_PATTERN: previewOriginPattern,
@@ -120,6 +120,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
       workersDev: false,
       compatibility: { date: "2026-09-01", flags: ["nodejs_compat"] },
       dev: { host: "127.0.0.1", port: 3000, strictPort: true },
+      env: {
+        // CI deploys the checked-out commit; post-deploy verification expects it from health.
+        // Alchemy's change detection hashes `env` props but not the `Config` reads made in
+        // init, so reading GITHUB_SHA there would leave a web-only deploy serving the old one.
+        PCOBOOSTER_VERSION: yield* optionalString("GITHUB_SHA"),
+      },
     };
   }),
   Effect.gen(function* api() {

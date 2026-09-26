@@ -11,7 +11,7 @@ export const planningCenterBudgetFailures = (): readonly (
   | PlanningCenterRateLimitError
   | PlanningCenterSubrequestLimitError
 )[] => [
-  new PlanningCenterRateLimitError({ retryAfterSeconds: 12 }),
+  new PlanningCenterRateLimitError({ retryAfterSeconds: 12, reason: "budget" }),
   new PlanningCenterSubrequestLimitError({ source: "worker", requests: 50 }),
   new PlanningCenterSubrequestLimitError({
     source: "budget",

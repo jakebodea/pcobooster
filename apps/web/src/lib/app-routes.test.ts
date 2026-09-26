@@ -52,6 +52,7 @@ describe(assertPlanView, () => {
 describe("app sections", () => {
   it("maps paths to their top-level section", () => {
     expect(getAppSection("/people")).toBe("people");
+    expect(getAppSection("/songs/12")).toBe("songs");
     expect(getAppSection("/services/1/plans/2/assign")).toBe("services");
   });
 
@@ -62,5 +63,11 @@ describe("app sections", () => {
       label: "Person",
     });
     expect(parseDetailRoute("/people")).toBeNull();
+    expect(parseDetailRoute("/songs/12")).toStrictEqual({
+      parentHref: "/songs",
+      parentLabel: "Songs",
+      label: "Chord chart",
+    });
+    expect(parseDetailRoute("/songs")).toBeNull();
   });
 });

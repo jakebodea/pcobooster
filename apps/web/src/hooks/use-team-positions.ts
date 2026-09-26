@@ -6,6 +6,7 @@ import { useCallback } from "react";
 
 import { useHydrateQueryFromCache } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { callForQuery } from "@/lib/request-priority";
 import {
   readCachedTeamPositions,
   writeCachedTeamPositions,
@@ -20,13 +21,17 @@ export const createTeamPositionsQueryOptions = (
   seriesId: string | null
 ) => ({
   queryKey: queryKeys.teamPositions(serviceTypeId, planId, seriesId),
-  queryFn: async ({ signal }: QueryFunctionContext) => {
+  queryFn: async (context: QueryFunctionContext) => {
     if (!isNonEmptyString(serviceTypeId) || !isNonEmptyString(planId)) {
       return [];
     }
-    const groups = await orpc.catalog.teamPositions(
-      { serviceTypeId, planId, seriesId: seriesId ?? undefined },
-      { signal }
+    const groups = await callForQuery(
+      context,
+      async (options) =>
+        await orpc.catalog.teamPositions(
+          { serviceTypeId, planId, seriesId: seriesId ?? undefined },
+          options
+        )
     );
     writeCachedTeamPositions(serviceTypeId, planId, seriesId, groups);
     return groups;

@@ -13,6 +13,7 @@ const EVENT_NAMES = {
   auth_session_created: "signed in",
   auth_session_deleted: "signed out",
   auth_account_linked: "planning center account linked",
+  auth_sign_in_failed: "sign in failed",
   schedule_attempt: "schedule assign attempted",
   schedule_status_change: "schedule status changed",
   schedule_remove: "schedule person removed",

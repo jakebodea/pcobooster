@@ -388,20 +388,25 @@ const transportFailure = (
   });
 };
 
-/** Waits for the pacer's slot, or fails fast when the wait is too long. */
-const waitForSlot = (
+/**
+ * Reserves a pacer slot and returns how long to wait before sending. A
+ * rejection reserves nothing, so it must not be released.
+ */
+const reserveSlot = (
   pacer: PlanningCenterRatePacer,
   scope: string,
   { accounting, endpoint, attempt }: AttemptContext,
   method: HttpMethod,
   logger: PlanningCenterLogger
-): Effect.Effect<void, PlanningCenterRateLimitError> =>
+): Effect.Effect<number, PlanningCenterRateLimitError> =>
   Clock.currentTimeMillis.pipe(
     Effect.flatMap((now) => {
+      const priority = accounting?.priority ?? "interactive";
       const decision = pacer.reserve(
         scope,
         now,
-        isReadMethod(method) ? "read" : "write"
+        isReadMethod(method) ? "read" : "write",
+        priority
       );
       if (decision.kind === "reject") {
         accounting?.recordRateLimitRejection();
@@ -410,19 +415,23 @@ const waitForSlot = (
             endpoint,
             method,
             attempt,
+            priority,
             retryAfterMs: decision.retryAfterMs,
             rateLimit: decision.window,
           },
-          "Planning Center request rejected: rate limit budget is spent"
+          decision.reason === "speculative"
+            ? "Planning Center speculative request held back: budget kept for interactive requests"
+            : "Planning Center request rejected: rate limit budget is spent"
         );
         return Effect.fail(
           new PlanningCenterRateLimitError({
             retryAfterSeconds: Math.ceil(decision.retryAfterMs / MS_PER_SECOND),
+            reason: decision.reason,
           })
         );
       }
       if (decision.waitMs === 0) {
-        return Effect.void;
+        return Effect.succeed(0);
       }
       accounting?.recordPaced(decision.waitMs);
       logger.info(
@@ -435,7 +444,7 @@ const waitForSlot = (
         },
         "Planning Center request paced"
       );
-      return Effect.sleep(Duration.millis(decision.waitMs));
+      return Effect.succeed(decision.waitMs);
     })
   );
 
@@ -529,9 +538,6 @@ export class PlanningCenterCoreClient {
     const { method } = request;
     const { accounting, endpoint, pacer } = context;
     const execute = Effect.gen(function* sendRequest() {
-      if (pacer !== undefined) {
-        yield* waitForSlot(pacer, cacheScope, context, method, logger);
-      }
       accounting?.recordRequest();
       const startedAt = yield* Clock.currentTimeMillis;
       const response = yield* httpClient
@@ -546,10 +552,18 @@ export class PlanningCenterCoreClient {
     const paced =
       pacer === undefined
         ? execute
-        : execute.pipe(
-            // Every reservation is released, including after a rejection,
-            // failure, or interruption; responses also report the window.
-            Effect.onExit((exit) =>
+        : Effect.acquireUseRelease(
+            reserveSlot(pacer, cacheScope, context, method, logger),
+            (waitMs) =>
+              waitMs === 0
+                ? execute
+                : Effect.andThen(
+                    Effect.sleep(Duration.millis(waitMs)),
+                    execute
+                  ),
+            // A granted reservation is released after the response, a
+            // failure, or an interruption; responses also report the window.
+            (_waitMs, exit) =>
               Effect.gen(function* releaseSlot() {
                 const now = yield* Clock.currentTimeMillis;
                 pacer.complete(
@@ -565,7 +579,6 @@ export class PlanningCenterCoreClient {
                     : undefined
                 );
               })
-            )
           );
     return Effect.gen(function* attemptRequest() {
       yield* ensureSubrequestAvailable(context, method, logger);

@@ -11,6 +11,7 @@ import {
 import { getCachedPeopleDashboardPersonDetail } from "@/lib/people-dashboard-person-placeholder";
 import { useHydrateQueryFromCache } from "@/lib/query-cache-hydration";
 import { queryKeys } from "@/lib/query-keys";
+import { callForQuery } from "@/lib/request-priority";
 import { orpc } from "@/orpc-client";
 
 export const createPeopleDashboardPersonQueryOptions = (
@@ -18,10 +19,17 @@ export const createPeopleDashboardPersonQueryOptions = (
   month: string | null
 ) => ({
   queryKey: queryKeys.peopleDashboardPerson(personId, month),
-  queryFn: async ({ signal }: QueryFunctionContext) => {
-    const detail = await orpc.people.dashboardPerson(
-      { personId, month: month !== null && month !== "" ? month : undefined },
-      { signal }
+  queryFn: async (context: QueryFunctionContext) => {
+    const detail = await callForQuery(
+      context,
+      async (options) =>
+        await orpc.people.dashboardPerson(
+          {
+            personId,
+            month: month !== null && month !== "" ? month : undefined,
+          },
+          options
+        )
     );
     writeCachedPeopleDashboardPerson(personId, month, detail);
     return detail;

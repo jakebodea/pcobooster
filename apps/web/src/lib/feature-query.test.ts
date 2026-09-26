@@ -3,20 +3,17 @@ import { QueryClient } from "@tanstack/react-query";
 import { isNotFound } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  createPeopleFeatureQueryOptions,
-  requirePeopleFeature,
-} from "@/lib/people-feature";
+import { createFeatureQueryOptions, requireFeature } from "@/lib/feature-query";
 
 const setup = (answer: FeatureStatus) => {
   const fetchPeopleFeature = vi
     .fn<() => Promise<FeatureStatus>>()
     .mockResolvedValue(answer);
-  const options = createPeopleFeatureQueryOptions(fetchPeopleFeature);
+  const options = createFeatureQueryOptions("people", fetchPeopleFeature);
   const queryClient = new QueryClient();
   const guard = async () => {
     try {
-      await requirePeopleFeature(queryClient, options);
+      await requireFeature(queryClient, options);
       return "allowed";
     } catch (error) {
       return isNotFound(error) ? "not-found" : error;
@@ -25,7 +22,7 @@ const setup = (answer: FeatureStatus) => {
   return { fetchPeopleFeature, options, queryClient, guard };
 };
 
-describe(requirePeopleFeature, () => {
+describe(requireFeature, () => {
   it("asks the API and allows People when the flag is on", async () => {
     const { fetchPeopleFeature, options, queryClient, guard } = setup({
       enabled: true,

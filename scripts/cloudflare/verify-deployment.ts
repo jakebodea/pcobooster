@@ -1,7 +1,8 @@
 /**
- * Wait until a deployed origin serves the expected commit through the web -> API binding,
- * then check the public home page. Workers roll out gradually, so the old version may answer
- * briefly after `alchemy deploy` returns.
+ * Wait until a deployed origin serves the expected commit from both Workers that CI redeploys
+ * on every commit: the web Worker at `/version`, and the API through the web -> API binding at
+ * `/api/rpc/health`. Then check the public home page. Workers roll out gradually, so the old
+ * version may answer briefly after `alchemy deploy` returns.
  *
  *   bun scripts/cloudflare/verify-deployment.ts <origin> <commit-sha>
  */
@@ -10,15 +11,17 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
 const attemptIntervalMs = 5000;
-const deadlineMs = 180_000;
+const defaultDeadlineMs = 180_000;
 
 const rpcHealthResponse = z.object({
   json: z.object({ status: z.literal("ok"), version: z.string() }),
 });
 
+const webVersionResponse = z.object({ version: z.string() });
+
 type Fetch = typeof fetch;
 
-/** The deployed version, or undefined until the origin answers with a healthy oRPC reply. */
+/** The API's deployed version, or undefined until it answers with a healthy oRPC reply. */
 export const readVersion = async (
   origin: string,
   fetchImpl: Fetch = fetch
@@ -34,6 +37,26 @@ export const readVersion = async (
     }
     const parsed = rpcHealthResponse.safeParse(await response.json());
     return parsed.success ? parsed.data.json.version : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** The web Worker's deployed version, or undefined until it answers. */
+export const readWebVersion = async (
+  origin: string,
+  fetchImpl: Fetch = fetch
+): Promise<string | undefined> => {
+  try {
+    const response = await fetchImpl(`${origin}/version`, {
+      headers: { accept: "application/json" },
+      redirect: "manual",
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const parsed = webVersionResponse.safeParse(await response.json());
+    return parsed.success ? parsed.data.version : undefined;
   } catch {
     return undefined;
   }
@@ -55,16 +78,25 @@ const homeIsServing = async (
 export const verifyDeployment = async (
   origin: string,
   expectedVersion: string,
-  { fetchImpl = fetch, intervalMs = attemptIntervalMs } = {}
+  {
+    fetchImpl = fetch,
+    intervalMs = attemptIntervalMs,
+    deadlineMs = defaultDeadlineMs,
+  } = {}
 ): Promise<void> => {
   const deadline = Date.now() + deadlineMs;
-  let lastVersion: string | undefined;
+  let webVersion: string | undefined;
+  let apiVersion: string | undefined;
   let homeServing = false;
   while (Date.now() < deadline) {
     // oxlint-disable-next-line no-await-in-loop -- Polling waits for the rollout.
-    lastVersion = await readVersion(origin, fetchImpl);
+    [webVersion, apiVersion] = await Promise.all([
+      readWebVersion(origin, fetchImpl),
+      readVersion(origin, fetchImpl),
+    ]);
     homeServing =
-      lastVersion === expectedVersion &&
+      webVersion === expectedVersion &&
+      apiVersion === expectedVersion &&
       // oxlint-disable-next-line no-await-in-loop -- Polling waits for the rollout.
       (await homeIsServing(origin, fetchImpl));
     if (homeServing) {
@@ -73,9 +105,14 @@ export const verifyDeployment = async (
     // oxlint-disable-next-line no-await-in-loop -- Polling waits for the rollout.
     await sleep(intervalMs);
   }
-  if (lastVersion !== expectedVersion) {
+  if (webVersion !== expectedVersion) {
     throw new Error(
-      `${origin} served ${lastVersion ?? "no healthy response"}, expected ${expectedVersion}`
+      `${origin}/version served ${webVersion ?? "no version"}, expected ${expectedVersion}`
+    );
+  }
+  if (apiVersion !== expectedVersion) {
+    throw new Error(
+      `${origin} API served ${apiVersion ?? "no healthy response"}, expected ${expectedVersion}`
     );
   }
   if (!homeServing) {
