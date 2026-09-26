@@ -10,7 +10,10 @@ import {
   PLANNING_CENTER_REQUEST_CAP,
   PROGRESSIVE_REQUEST_BUDGET,
 } from "@pcobooster/api/planning-center/request-budget";
-import type { PlanningCenterPeopleService } from "@pcobooster/api/planning-center/services/people-service";
+import type {
+  PlanningCenterPeopleService,
+  TeamRoster,
+} from "@pcobooster/api/planning-center/services/people-service";
 import type { PlanningCenterPlansService } from "@pcobooster/api/planning-center/services/plans-service";
 import { planningCenterBudgetFailures } from "@pcobooster/api/testing/planning-center-failures";
 import { countedRead } from "@pcobooster/api/testing/planning-center-requests";
@@ -66,15 +69,20 @@ const planTime = (
   attributes: { time_type: timeType, starts_at: startsAt },
 });
 
-const rosterService = (
-  people: PCResource[],
-  teamNamesByPersonId = new Map<string, Set<string>>()
-) => ({
+const teamRoster = (
+  id: string,
+  name: string,
+  personIds: string[],
+  {
+    leaderPersonIds = [],
+    serviceTypeName = "Sunday",
+  }: { leaderPersonIds?: string[]; serviceTypeName?: string | null } = {}
+): TeamRoster => ({ id, name, serviceTypeName, personIds, leaderPersonIds });
+
+const rosterService = (people: PCResource[], teams: TeamRoster[] = []) => ({
   getAllPeopleFromTeams: vi
     .fn<PlanningCenterPeopleService["getAllPeopleFromTeams"]>()
-    .mockReturnValue(
-      Effect.succeed({ people, included: [], teamNamesByPersonId })
-    ),
+    .mockReturnValue(Effect.succeed({ people, included: [], teams })),
 });
 
 const activityDependencies = ({
@@ -142,16 +150,19 @@ describe(getPeopleDashboardRoster, () => {
           archived_at: "2026-01-01T00:00:00Z",
         }),
       ],
-      new Map([
-        ["person-1", new Set(["Band", "Vocals", "Tech", "Hosts"])],
-        ["person-3", new Set(["Band"])],
-      ])
+      [
+        teamRoster("band", "Band", ["person-1", "person-3"]),
+        teamRoster("vocals", "Vocals", ["person-1"]),
+        teamRoster("tech", "Tech", ["person-1"]),
+        teamRoster("hosts", "Hosts", ["person-1"]),
+      ]
     );
 
     const roster = await Effect.runPromise(
       getPeopleDashboardRoster({
         peopleService: service,
         resolveTimeZone: Effect.succeed("America/Los_Angeles"),
+        viewerPersonId: null,
       })
     );
 
@@ -180,6 +191,64 @@ describe(getPeopleDashboardRoster, () => {
       },
     ]);
     expect(service.getAllPeopleFromTeams).toHaveBeenCalledOnce();
+    expect(roster.ledTeamIds).toStrictEqual([]);
+  });
+
+  it("lists teams with their listed members and the teams the viewer leads", async () => {
+    const service = rosterService(
+      [
+        person("person-1", "Alex", "Adams"),
+        person("person-2", "Blair", "Brown"),
+        person("person-3", "Casey", "Archived", {
+          archived_at: "2026-01-01T00:00:00Z",
+        }),
+      ],
+      [
+        teamRoster("youth-band", "Band", ["person-2"], {
+          serviceTypeName: "Youth",
+          leaderPersonIds: ["person-1"],
+        }),
+        teamRoster("band", "Band", ["person-1", "person-2", "person-3"], {
+          leaderPersonIds: ["person-1"],
+        }),
+        teamRoster("hosts", "Hosts", ["person-2"], {
+          leaderPersonIds: ["person-2"],
+        }),
+        teamRoster("empty", "Archived only", ["person-3"], {
+          leaderPersonIds: ["person-1"],
+        }),
+      ]
+    );
+
+    const roster = await Effect.runPromise(
+      getPeopleDashboardRoster({
+        peopleService: service,
+        resolveTimeZone: Effect.succeed("UTC"),
+        viewerPersonId: "person-1",
+      })
+    );
+
+    expect(roster.teams).toStrictEqual([
+      {
+        id: "band",
+        name: "Band",
+        serviceTypeName: "Sunday",
+        personIds: ["person-1", "person-2"],
+      },
+      {
+        id: "youth-band",
+        name: "Band",
+        serviceTypeName: "Youth",
+        personIds: ["person-2"],
+      },
+      {
+        id: "hosts",
+        name: "Hosts",
+        serviceTypeName: "Sunday",
+        personIds: ["person-2"],
+      },
+    ]);
+    expect(roster.ledTeamIds).toStrictEqual(["youth-band", "band"]);
   });
 
   it("fails instead of returning an empty roster when the team read fails", async () => {
@@ -195,6 +264,7 @@ describe(getPeopleDashboardRoster, () => {
           getPeopleDashboardRoster({
             peopleService: service,
             resolveTimeZone: Effect.succeed("UTC"),
+            viewerPersonId: null,
           })
         )
       )
@@ -225,7 +295,12 @@ describe(getPeopleDashboardActivity, () => {
     );
 
     expect(getPersonSchedulesAfter.mock.calls).toStrictEqual([
-      ["person-1", "2026-02-21", 2],
+      [
+        "person-1",
+        "2025-11-23",
+        2,
+        { includeDeclined: true, newestFirst: true },
+      ],
     ]);
     expect(batch).toMatchObject({
       deferredPersonIds: [],
@@ -278,6 +353,54 @@ describe(getPeopleDashboardActivity, () => {
     expect(batch.people[0]?.monthDays.map(({ day }) => day)).toStrictEqual([
       9, 19,
     ]);
+  });
+
+  it("reports the serving rhythm and leaves declined schedules out of serving counts", async () => {
+    vi.useFakeTimers({ now: new Date("2026-05-23T12:00:00.000Z") });
+    const { dependencies, getPlansWithIncludedInDateRange } =
+      activityDependencies({
+        schedulesByPerson: {
+          "person-1": {
+            data: [
+              // Older than the plan-time window: counted, times not resolved.
+              schedule("old", "2026-01-04T17:00:00.000Z", {
+                serviceTypeId: "old-type",
+                timeIds: ["rehearsal-old"],
+              }),
+              schedule("feb", "2026-02-22T17:00:00.000Z"),
+              schedule("apr", "2026-04-19T17:00:00.000Z"),
+              schedule("declined", "2026-05-17T17:00:00.000Z", {
+                status: "D",
+                timeIds: ["rehearsal-declined"],
+              }),
+              schedule("pending", "2026-06-07T17:00:00.000Z", {
+                status: "U",
+              }),
+            ],
+          },
+        },
+      });
+
+    const batch = await Effect.runPromise(
+      getPeopleDashboardActivity({ personIds: ["person-1"], dependencies })
+    );
+
+    expect(getPlansWithIncludedInDateRange).not.toHaveBeenCalled();
+    expect(batch.people[0]?.rhythm).toStrictEqual({
+      lastServedOn: "2026-04-19",
+      nextServingOn: "2026-06-07",
+      servedDays30: 0,
+      servedDays90: 2,
+      servedDays180: 3,
+      upcomingDays30: 1,
+      typicalGapDays: 53,
+      requests180: 5,
+      declined180: 1,
+      pendingUpcoming: 1,
+      nextPendingOn: "2026-06-07",
+    });
+    expect(batch.people[0]).toMatchObject({ lastServed: "Apr 19" });
+    expect(batch.people[0]?.monthDays).toStrictEqual([]);
   });
 
   it("classifies rehearsals with one plan-range read per service type, not per plan", async () => {

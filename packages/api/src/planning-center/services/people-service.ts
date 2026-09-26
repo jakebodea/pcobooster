@@ -40,10 +40,21 @@ export const PLAN_ROSTER_MAX_PAGES = 25;
 /** 100 teams per page; an organization with more than 1,000 teams is cut off. */
 const TEAM_PAGES_MAX = 10;
 
-interface AllTeamPeopleResponse {
+/** One active team: who is on it and who leads it. */
+export interface TeamRoster {
+  id: string;
+  name: string;
+  /** The team's primary service type, to tell same-named teams apart. */
+  serviceTypeName: string | null;
+  personIds: string[];
+  leaderPersonIds: string[];
+}
+
+export interface AllTeamPeopleResponse {
+  /** Each team member once, in the order teams list them. */
   people: PCResource[];
   included: PCResource[];
-  teamNamesByPersonId: Map<string, Set<string>>;
+  teams: TeamRoster[];
 }
 
 interface ResourceCollectionResponse {
@@ -81,16 +92,7 @@ const getRelationshipIdentifiers = (
 
 const cloneAllTeamPeopleResponse = (
   response: AllTeamPeopleResponse
-): AllTeamPeopleResponse => ({
-  people: structuredClone(response.people),
-  included: structuredClone(response.included),
-  teamNamesByPersonId: new Map(
-    [...response.teamNamesByPersonId.entries()].map(([personId, teamNames]) => [
-      personId,
-      new Set(teamNames),
-    ])
-  ),
-});
+): AllTeamPeopleResponse => structuredClone(response);
 
 const cloneResourceCollectionResponse = (
   response: ResourceCollectionResponse
@@ -106,49 +108,95 @@ const toResourceCollection = (
   included: fetched.included ?? [],
 });
 
+const relatedId = (relationship: PCRelationship | undefined) =>
+  getRelationshipIdentifiers(relationship?.data)[0]?.id;
+
+interface TeamIncludes {
+  peopleById: Map<string, PCResource>;
+  leaderPersonIdByLeaderId: Map<string, string>;
+  serviceTypeNameById: Map<string, string>;
+}
+
+const indexTeamIncludes = (included: readonly PCResource[]): TeamIncludes => {
+  const indexes: TeamIncludes = {
+    peopleById: new Map(),
+    leaderPersonIdByLeaderId: new Map(),
+    serviceTypeNameById: new Map(),
+  };
+  for (const resource of included) {
+    if (resource.type === "Person") {
+      indexes.peopleById.set(resource.id, resource);
+      continue;
+    }
+    const leaderPersonId =
+      resource.type === "TeamLeader"
+        ? relatedId(resource.relationships?.person)
+        : undefined;
+    if (isNonEmptyString(leaderPersonId)) {
+      indexes.leaderPersonIdByLeaderId.set(resource.id, leaderPersonId);
+    }
+    if (
+      resource.type === "ServiceType" &&
+      isNonEmptyString(resource.attributes.name)
+    ) {
+      indexes.serviceTypeNameById.set(
+        resource.id,
+        resource.attributes.name.trim()
+      );
+    }
+  }
+  return indexes;
+};
+
+/** A team's members that were sideloaded, its leaders, and its service type. */
+const toTeamRoster = (team: PCResource, includes: TeamIncludes): TeamRoster => {
+  const personIds = getRelationshipIdentifiers(
+    team.relationships?.people?.data
+  ).flatMap(({ id }) => (includes.peopleById.has(id) ? [id] : []));
+  const leaderPersonIds = getRelationshipIdentifiers(
+    team.relationships?.team_leaders?.data
+  ).flatMap(({ id }) => {
+    const personId = includes.leaderPersonIdByLeaderId.get(id);
+    return personId === undefined ? [] : [personId];
+  });
+  const serviceTypeId = relatedId(team.relationships?.service_type);
+  const name = isString(team.attributes.name)
+    ? team.attributes.name.trim()
+    : "";
+  return {
+    id: team.id,
+    name: name || "Unnamed team",
+    serviceTypeName:
+      serviceTypeId === undefined
+        ? null
+        : (includes.serviceTypeNameById.get(serviceTypeId) ?? null),
+    personIds,
+    leaderPersonIds: [...new Set(leaderPersonIds)],
+  };
+};
+
 /**
- * `teams?include=people` lists every member of each team in one response
- * (measured: a 65-person team arrives whole), unlike `teams/{id}/people`,
- * which needs one request per team and pages at 25.
+ * `teams?include=people,team_leaders,service_types` lists every member and
+ * leader of each team in one response (measured: a 65-person team arrives
+ * whole), unlike `teams/{id}/people`, which needs one request per team and
+ * pages at 25.
  */
 const collectTeamPeople = ({
   data: teams,
   included,
 }: ResourceCollectionResponse): AllTeamPeopleResponse => {
-  const peopleById = new Map<string, PCResource>();
-  for (const resource of included) {
-    if (resource.type === "Person") {
-      peopleById.set(resource.id, resource);
-    }
-  }
-
-  const people: PCResource[] = [];
-  const teamNamesByPersonId = new Map<string, Set<string>>();
-  for (const team of teams) {
-    if (isNonEmptyString(team.attributes.archived_at)) {
-      continue;
-    }
-    const teamName = team.attributes.name;
-    for (const { id } of getRelationshipIdentifiers(
-      team.relationships?.people?.data
-    )) {
-      const person = peopleById.get(id);
-      if (!person) {
-        continue;
-      }
-      const teamNames = teamNamesByPersonId.get(id);
-      if (!teamNames) {
-        people.push(person);
-      }
-      const nextTeamNames = teamNames ?? new Set<string>();
-      if (isString(teamName) && teamName.trim()) {
-        nextTeamNames.add(teamName);
-      }
-      teamNamesByPersonId.set(id, nextTeamNames);
-    }
-  }
-
-  return { people, included: [], teamNamesByPersonId };
+  const includes = indexTeamIncludes(included);
+  const rosters = teams.flatMap((team) =>
+    isNonEmptyString(team.attributes.archived_at)
+      ? []
+      : [toTeamRoster(team, includes)]
+  );
+  const personIds = new Set(rosters.flatMap((team) => team.personIds));
+  const people = [...personIds].flatMap((id) => {
+    const person = includes.peopleById.get(id);
+    return person === undefined ? [] : [person];
+  });
+  return { people, included: [], teams: rosters };
 };
 
 export class PlanningCenterPeopleService {
@@ -314,18 +362,28 @@ export class PlanningCenterPeopleService {
   /**
    * Schedules from `after` (a YYYY-MM-DD day or an ISO instant) onward, with service PlanTimes sideloaded. Like
    * `getPersonSchedules`, it leaves rehearsal PlanTimes for callers to resolve. Planning Center's default scope returns only future schedules, so the explicit
-   * `after` filter is what makes past schedules visible. Declined schedules stay excluded.
+   * `after` filter is what makes past schedules visible. Declined schedules stay excluded
+   * unless `includeDeclined` asks for them (status `D`). `newestFirst` reads the latest
+   * schedules first, so a read cut off at `maxPages` drops the oldest history instead of
+   * upcoming dates.
    */
   getPersonSchedulesAfter(
     personId: string,
     after: string,
-    maxPages = 3
+    maxPages = 3,
+    {
+      includeDeclined = false,
+      newestFirst = false,
+    }: {
+      readonly includeDeclined?: boolean;
+      readonly newestFirst?: boolean;
+    } = {}
   ): Effect.Effect<ResourceCollectionResponse, PlanningCenterError> {
     const params = {
-      filter: "after",
+      filter: includeDeclined ? "after,with_declined" : "after",
       after,
       include: "plan_times",
-      order: "starts_at",
+      order: newestFirst ? "-starts_at" : "starts_at",
     };
     return cachedRead(
       this.caches.collections,
@@ -702,7 +760,7 @@ export class PlanningCenterPeopleService {
     return this.core
       .fetchAllWithIncluded(
         "/services/v2/teams",
-        { include: "people" },
+        { include: "people,team_leaders,service_types" },
         TEAM_PAGES_MAX
       )
       .pipe(Effect.map(collectTeamPeople));

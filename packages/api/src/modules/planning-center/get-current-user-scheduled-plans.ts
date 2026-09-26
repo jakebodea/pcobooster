@@ -47,13 +47,16 @@ const isScheduledStatus = (status: string | undefined): boolean => {
   return normalized !== "declined" && normalized !== "d";
 };
 
-export interface CurrentUserScheduledPlansDependencies {
+export interface CurrentUserIdentityDependencies {
   readonly isDevAuthBypassEnabled: () => boolean;
   readonly loadDevBypassIdentity: () => Promise<DevBypassIdentity>;
   readonly getPlanningCenterIdentityForAccount: (
     request: Request,
     account: { id: string; accountId: string }
   ) => Promise<PlanningCenterIdentity | null>;
+}
+
+export interface CurrentUserScheduledPlansDependencies extends CurrentUserIdentityDependencies {
   readonly peopleService: Pick<
     PlanningCenterPeopleService,
     "getPersonSchedules"
@@ -91,6 +94,26 @@ const collectScheduledPlanIds = (
   return [...matchedPlanIds];
 };
 
+/** The signed-in account's Planning Center person id; null when it cannot be read. */
+export const resolveCurrentUserPersonId = (
+  request: Request,
+  account: { id: string; accountId: string },
+  dependencies: CurrentUserIdentityDependencies
+): Effect.Effect<string | null> =>
+  Effect.gen(function* readCurrentUserPersonId() {
+    if (dependencies.isDevAuthBypassEnabled()) {
+      const identity = yield* Effect.promise(
+        async () => await dependencies.loadDevBypassIdentity()
+      );
+      return isNonEmptyString(identity.personId) ? identity.personId : null;
+    }
+    const identity = yield* Effect.promise(
+      async () =>
+        await dependencies.getPlanningCenterIdentityForAccount(request, account)
+    );
+    return extractPersonIdFromIdentitySub(identity?.sub ?? null);
+  });
+
 export const getCurrentUserScheduledPlanIds = (
   request: Request,
   account: { id: string; accountId: string },
@@ -102,22 +125,11 @@ export const getCurrentUserScheduledPlanIds = (
       return [];
     }
 
-    let personId: string | null;
-    if (dependencies.isDevAuthBypassEnabled()) {
-      const identity = yield* Effect.promise(
-        async () => await dependencies.loadDevBypassIdentity()
-      );
-      ({ personId } = identity);
-    } else {
-      const identity = yield* Effect.promise(
-        async () =>
-          await dependencies.getPlanningCenterIdentityForAccount(
-            request,
-            account
-          )
-      );
-      personId = extractPersonIdFromIdentitySub(identity?.sub ?? null);
-    }
+    const personId = yield* resolveCurrentUserPersonId(
+      request,
+      account,
+      dependencies
+    );
     if (!isNonEmptyString(personId)) {
       return [];
     }

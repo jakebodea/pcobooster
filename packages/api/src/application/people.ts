@@ -15,7 +15,11 @@ import type {
   CandidateDetailsBatch,
   CandidateDetailsInput,
 } from "@pcobooster/api/modules/planning-center/get-candidate-details";
-import { getCurrentUserScheduledPlanIds } from "@pcobooster/api/modules/planning-center/get-current-user-scheduled-plans";
+import {
+  getCurrentUserScheduledPlanIds,
+  resolveCurrentUserPersonId,
+} from "@pcobooster/api/modules/planning-center/get-current-user-scheduled-plans";
+import type { CurrentUserIdentityDependencies } from "@pcobooster/api/modules/planning-center/get-current-user-scheduled-plans";
 import {
   getPeopleDashboardActivity as getPeopleDashboardActivityData,
   getPeopleDashboardRoster as getPeopleDashboardRosterData,
@@ -48,6 +52,35 @@ import type { PeopleSearchResult } from "@pcobooster/api/modules/planning-center
 import { Server } from "@pcobooster/api/server";
 import type { Blockout } from "@pcobooster/planning-center-models/types";
 import { Effect } from "effect";
+
+const currentUserIdentityDependencies = Effect.gen(
+  function* readCurrentUserIdentityDependencies() {
+    const { auth, config } = yield* Server;
+    const dependencies: CurrentUserIdentityDependencies = {
+      isDevAuthBypassEnabled: () => config.devAuthBypass,
+      loadDevBypassIdentity: async () =>
+        await loadDevBypassIdentity(config.localPlanningCenterToken),
+      getPlanningCenterIdentityForAccount: async (request, account) =>
+        await getPlanningCenterIdentityForAccount(auth, request, account),
+    };
+    return dependencies;
+  }
+);
+
+/** The signed-in person's Planning Center id; null for demo visitors or when unreadable. */
+const currentUserPersonId = (access: PlanningCenterRequestAccess) =>
+  Effect.gen(function* readCurrentUserPersonId() {
+    // A demo visitor is not a person in the demo organization.
+    if (access.authentication.kind === "demo") {
+      return null;
+    }
+    const { request } = yield* RequestContext;
+    return yield* resolveCurrentUserPersonId(
+      request,
+      access.authentication.account,
+      yield* currentUserIdentityDependencies
+    );
+  });
 
 /** The People dashboard exists only where the `people` flag is on for this caller. */
 const requirePeopleDashboard = (access: PlanningCenterRequestAccess) =>
@@ -166,6 +199,7 @@ export const getPeopleDashboardRoster = (): Effect.Effect<
     const roster = yield* getPeopleDashboardRosterData({
       peopleService: access.services.people,
       resolveTimeZone: access.services.organizationTimeZone,
+      viewerPersonId: yield* currentUserPersonId(access),
     });
     return yield* presentDashboardRoster(
       roster,
@@ -231,7 +265,6 @@ export const getMyScheduledPlans = (input: {
   Effect.gen(function* readMyScheduledPlans() {
     const access = yield* PlanningCenterAccess;
     const { request } = yield* RequestContext;
-    const { auth, config } = yield* Server;
     // A demo visitor is not a person in the demo organization.
     if (access.authentication.kind === "demo") {
       return { planIds: [] };
@@ -243,19 +276,8 @@ export const getMyScheduledPlans = (input: {
       account,
       uniquePlanIds,
       {
+        ...(yield* currentUserIdentityDependencies),
         peopleService: access.services.people,
-        isDevAuthBypassEnabled: () => config.devAuthBypass,
-        loadDevBypassIdentity: async () =>
-          await loadDevBypassIdentity(config.localPlanningCenterToken),
-        getPlanningCenterIdentityForAccount: async (
-          identityRequest,
-          identityAccount
-        ) =>
-          await getPlanningCenterIdentityForAccount(
-            auth,
-            identityRequest,
-            identityAccount
-          ),
       }
     );
     return { planIds };

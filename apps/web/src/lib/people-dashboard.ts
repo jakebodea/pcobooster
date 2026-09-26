@@ -2,12 +2,19 @@ import type {
   PeopleDashboardActivity,
   PeopleDashboardLoad,
   PeopleDashboardMonth,
-  PeopleDashboardPerson,
   PeopleDashboardRoster,
+  PeopleDashboardTeam,
 } from "@pcobooster/contracts/people-schemas";
 
-/** People whose schedules load without asking; more load on request. */
+import type { TeamMember } from "@/lib/team-health";
+
+/** People whose schedules load without asking in the all-teams scope; more load on request. */
 export const PEOPLE_DASHBOARD_SAMPLE_SIZE = 48;
+/**
+ * A team scope loads whole up to this many people, so its health covers
+ * everyone; larger scopes load in samples like the all-teams scope.
+ */
+export const PEOPLE_DASHBOARD_TEAM_SCOPE_LIMIT = 160;
 /**
  * Activity calls in flight at once. Each costs about 20 Planning Center
  * requests cold, and the user's budget is 100 per 20 seconds.
@@ -25,8 +32,30 @@ export interface PeopleDashboardDay {
   blockoutCount: number;
 }
 
+/** The teams the viewer leads, every team, or one team by id. */
+export type PeopleDashboardScope = "mine" | "all" | `team:${string}`;
+
+const TEAM_SCOPE_PREFIX = "team:";
+
+export const teamScope = (teamId: string): PeopleDashboardScope =>
+  `${TEAM_SCOPE_PREFIX}${teamId}`;
+
+/** A select value as a scope; anything unrecognized is null. */
+export const parsePeopleDashboardScope = (
+  value: string
+): PeopleDashboardScope | null => {
+  if (value === "mine" || value === "all") {
+    return value;
+  }
+  return value.startsWith(TEAM_SCOPE_PREFIX) &&
+    value.length > TEAM_SCOPE_PREFIX.length
+    ? teamScope(value.slice(TEAM_SCOPE_PREFIX.length))
+    : null;
+};
+
 export interface PeopleDashboardProgress {
-  rosterPeopleCount: number;
+  /** People in the selected scope. */
+  scopePeopleCount: number;
   /** Roster people whose schedules were requested so far. */
   requestedPeopleCount: number;
   hydratedPeopleCount: number;
@@ -37,14 +66,11 @@ export interface PeopleDashboardData {
   generatedAt: string;
   month: PeopleDashboardMonth;
   /** Roster teams, available before any activity arrives. */
-  teams: string[];
-  /** People with activity loaded, heaviest load first. */
-  people: PeopleDashboardPerson[];
-  stats: {
-    scheduledPeople: number;
-    highLoadPeople: number;
-    availableSoonPeople: number;
-  };
+  teams: PeopleDashboardTeam[];
+  /** Teams the viewer leads. */
+  ledTeamIds: string[];
+  /** People in scope with activity loaded, heaviest load first. */
+  people: TeamMember[];
   monthDays: PeopleDashboardDay[];
   matrixDays: number[];
   progress: PeopleDashboardProgress;
@@ -68,13 +94,11 @@ const loadRank = (load: PeopleDashboardLoad) => {
   return 1;
 };
 
-const buildMonthDays = (
-  people: PeopleDashboardPerson[]
-): PeopleDashboardDay[] =>
+const buildMonthDays = (people: TeamMember[]): PeopleDashboardDay[] =>
   Array.from({ length: DAYS_IN_LONGEST_MONTH }, (_, index) => {
     const day = index + 1;
     const peopleWith = (
-      matches: (entry: PeopleDashboardPerson["monthDays"][number]) => boolean
+      matches: (entry: TeamMember["monthDays"][number]) => boolean
     ) =>
       people.filter((person) =>
         person.monthDays.some((entry) => entry.day === day && matches(entry))
@@ -103,15 +127,58 @@ const getServiceMatrixDays = (monthDays: PeopleDashboardDay[]) => {
     : monthDays.slice(0, MATRIX_DAY_COUNT).map((day) => day.day);
 };
 
-/** The first `targetPeopleCount` roster people, split into activity calls. */
+/** The scope a leader lands on: their own teams when they lead any. */
+export const defaultPeopleDashboardScope = (
+  roster: Pick<PeopleDashboardRoster, "ledTeamIds">
+): PeopleDashboardScope => (roster.ledTeamIds.length > 0 ? "mine" : "all");
+
+/** The teams a team scope covers; null for all teams. */
+export const scopeTeamIds = (
+  scope: PeopleDashboardScope,
+  ledTeamIds: readonly string[]
+): readonly string[] | null => {
+  if (scope === "all") {
+    return null;
+  }
+  return scope === "mine"
+    ? ledTeamIds
+    : [scope.slice(TEAM_SCOPE_PREFIX.length)];
+};
+
+/** The scope's people, in roster order (by last name). */
+export const resolveScopePersonIds = (
+  roster: PeopleDashboardRoster,
+  scope: PeopleDashboardScope
+): string[] => {
+  const scopedTeamIds = scopeTeamIds(scope, roster.ledTeamIds);
+  if (scopedTeamIds === null) {
+    return roster.people.map((person) => person.id);
+  }
+  const teamIds = new Set(scopedTeamIds);
+  const inScope = new Set(
+    roster.teams.flatMap((team) => (teamIds.has(team.id) ? team.personIds : []))
+  );
+  return roster.people.flatMap((person) =>
+    inScope.has(person.id) ? [person.id] : []
+  );
+};
+
+/** How many of a scope's people load before the viewer asks for more. */
+export const initialScopeLoadCount = (
+  scope: PeopleDashboardScope,
+  scopePeopleCount: number
+) =>
+  scope !== "all" && scopePeopleCount <= PEOPLE_DASHBOARD_TEAM_SCOPE_LIMIT
+    ? scopePeopleCount
+    : PEOPLE_DASHBOARD_SAMPLE_SIZE;
+
+/** The first `targetPeopleCount` scope people, split into activity calls. */
 export const planPeopleDashboardBatches = (
-  roster: PeopleDashboardRoster | undefined,
+  personIds: readonly string[],
   targetPeopleCount: number,
   batchSize: number
 ): string[][] => {
-  const ids = (roster?.people ?? [])
-    .slice(0, Math.max(0, targetPeopleCount))
-    .map((person) => person.id);
+  const ids = personIds.slice(0, Math.max(0, targetPeopleCount));
   const batches: string[][] = [];
   for (let start = 0; start < ids.length; start += batchSize) {
     batches.push(ids.slice(start, start + batchSize));
@@ -122,15 +189,22 @@ export const planPeopleDashboardBatches = (
 export const assemblePeopleDashboard = (
   roster: PeopleDashboardRoster,
   activities: readonly PeopleDashboardActivity[],
-  requestedPeopleCount: number
+  {
+    scopePersonIds,
+    requestedPeopleCount,
+  }: {
+    scopePersonIds: readonly string[];
+    requestedPeopleCount: number;
+  }
 ): PeopleDashboardData => {
   const activityById = new Map(
     activities.map((activity) => [activity.id, activity])
   );
+  const inScope = new Set(scopePersonIds);
   const people = roster.people
-    .flatMap((person): PeopleDashboardPerson[] => {
+    .flatMap((person): TeamMember[] => {
       const activity = activityById.get(person.id);
-      if (!activity) {
+      if (!activity || !inScope.has(person.id)) {
         return [];
       }
       const { id: _activityId, ...serving } = activity;
@@ -145,28 +219,14 @@ export const assemblePeopleDashboard = (
   return {
     generatedAt: roster.generatedAt,
     month: roster.month,
-    teams: [
-      ...new Set(roster.people.flatMap((person) => person.teams)),
-    ].toSorted((a, b) => a.localeCompare(b)),
+    teams: roster.teams,
+    ledTeamIds: roster.ledTeamIds,
     people,
-    stats: {
-      scheduledPeople: people.filter((person) => person.monthCount > 0).length,
-      highLoadPeople: people.filter(
-        (person) => person.load === "high" || person.load === "rest"
-      ).length,
-      availableSoonPeople: people.filter(
-        (person) =>
-          person.load === "low" || person.nextScheduled === "Not scheduled"
-      ).length,
-    },
     monthDays,
     matrixDays: getServiceMatrixDays(monthDays),
     progress: {
-      rosterPeopleCount: roster.people.length,
-      requestedPeopleCount: Math.min(
-        requestedPeopleCount,
-        roster.people.length
-      ),
+      scopePeopleCount: inScope.size,
+      requestedPeopleCount: Math.min(requestedPeopleCount, inScope.size),
       hydratedPeopleCount: people.length,
     },
   };

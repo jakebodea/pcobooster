@@ -7,11 +7,19 @@ import { describe, expect, it } from "vitest";
 const person = { id: "person-1", type: "Person", attributes: { name: "A" } };
 
 describe("shared read codecs", () => {
-  it("round-trips team people, including the team names map", () => {
+  it("round-trips team people with their team rosters", () => {
     const value = {
       people: [person],
       included: [],
-      teamNamesByPersonId: new Map([["person-1", new Set(["Band", "Tech"])]]),
+      teams: [
+        {
+          id: "team-1",
+          name: "Band",
+          serviceTypeName: "Sunday",
+          personIds: ["person-1"],
+          leaderPersonIds: ["person-1"],
+        },
+      ],
     };
 
     expect(

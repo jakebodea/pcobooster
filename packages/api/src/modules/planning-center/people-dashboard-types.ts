@@ -22,8 +22,27 @@ export interface PeopleDashboardRosterPerson {
   teams: string[];
 }
 
+/** How a person has been serving and responding; days are org `YYYY-MM-DD`. */
+export interface ServingRhythm {
+  lastServedOn: string | null;
+  nextServingOn: string | null;
+  servedDays30: number;
+  servedDays90: number;
+  servedDays180: number;
+  upcomingDays30: number;
+  /** Median days between served days in the last 180; null with too few. */
+  typicalGapDays: number | null;
+  /** Schedules dated in the last 180 days or later, declined included. */
+  requests180: number;
+  declined180: number;
+  /** Upcoming schedules still unconfirmed. */
+  pendingUpcoming: number;
+  nextPendingOn: string | null;
+}
+
 export interface PeopleDashboardActivity {
   id: string;
+  rhythm: ServingRhythm;
   roles: string;
   status: string;
   load: PeopleDashboardLoad;
@@ -48,12 +67,22 @@ export interface PeopleDashboardActivity {
 }
 
 export type PeopleDashboardPerson = PeopleDashboardRosterPerson &
-  Omit<PeopleDashboardActivity, "id">;
+  Omit<PeopleDashboardActivity, "id" | "rhythm">;
+
+export interface PeopleDashboardTeam {
+  id: string;
+  name: string;
+  serviceTypeName: string | null;
+  personIds: string[];
+}
 
 export interface PeopleDashboardRoster {
   generatedAt: string;
   month: PeopleDashboardMonth;
   people: PeopleDashboardRosterPerson[];
+  teams: PeopleDashboardTeam[];
+  /** Teams the signed-in person leads; empty when they lead none or are unknown. */
+  ledTeamIds: string[];
 }
 
 export interface PeopleDashboardActivityBatch {

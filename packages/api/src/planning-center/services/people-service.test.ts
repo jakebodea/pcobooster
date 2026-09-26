@@ -157,17 +157,23 @@ const team = (
 });
 
 describe("PlanningCenterPeopleService.getAllPeopleFromTeams", () => {
-  it("reads every team roster in one request and returns mutation-safe copies", async () => {
+  it("reads every team roster and its leaders in one request and returns mutation-safe copies", async () => {
     const core = createBasicPlanningCenterClient(
       testPlanningCenterToken,
       unreachableHttpClient
     );
+    const band = team("team-1", "Band", ["person-1", "person-2"]);
+    band.relationships = {
+      ...band.relationships,
+      team_leaders: { data: [{ id: "leader-1", type: "TeamLeader" }] },
+      service_type: { data: { id: "st-1", type: "ServiceType" } },
+    };
     const fetchAllWithIncluded = vi
       .spyOn(core, "fetchAllWithIncluded")
       .mockReturnValue(
         Effect.succeed({
           data: [
-            team("team-1", "Band", ["person-1", "person-2"]),
+            band,
             team("team-2", "Hosts", ["person-1"]),
             team("team-3", "Retired", ["person-3"], "2026-01-01T00:00:00Z"),
           ],
@@ -175,6 +181,13 @@ describe("PlanningCenterPeopleService.getAllPeopleFromTeams", () => {
             resource("person-1", "Person", { first_name: "Alex" }),
             resource("person-2", "Person", { first_name: "Blair" }),
             resource("person-3", "Person", { first_name: "Casey" }),
+            {
+              ...resource("leader-1", "TeamLeader", {}),
+              relationships: {
+                person: { data: { id: "person-2", type: "Person" } },
+              },
+            },
+            resource("st-1", "ServiceType", { name: "Sunday" }),
           ],
         })
       );
@@ -182,22 +195,35 @@ describe("PlanningCenterPeopleService.getAllPeopleFromTeams", () => {
 
     const first = await Effect.runPromise(service.getAllPeopleFromTeams());
     first.people[0].attributes.first_name = "Mutated";
-    first.teamNamesByPersonId.get("person-1")?.add("Mutated Team");
+    first.teams[0]?.personIds.push("mutated");
     const second = await Effect.runPromise(service.getAllPeopleFromTeams());
 
     expect(fetchAllWithIncluded).toHaveBeenCalledOnce();
     expect(fetchAllWithIncluded.mock.calls[0]?.slice(0, 2)).toStrictEqual([
       "/services/v2/teams",
-      { include: "people" },
+      { include: "people,team_leaders,service_types" },
     ]);
     expect(second.people.map((person) => person.id)).toStrictEqual([
       "person-1",
       "person-2",
     ]);
     expect(second.people[0].attributes.first_name).toBe("Alex");
-    expect([
-      ...(second.teamNamesByPersonId.get("person-1") ?? []),
-    ]).toStrictEqual(["Band", "Hosts"]);
+    expect(second.teams).toStrictEqual([
+      {
+        id: "team-1",
+        name: "Band",
+        serviceTypeName: "Sunday",
+        personIds: ["person-1", "person-2"],
+        leaderPersonIds: ["person-2"],
+      },
+      {
+        id: "team-2",
+        name: "Hosts",
+        serviceTypeName: null,
+        personIds: ["person-1"],
+        leaderPersonIds: [],
+      },
+    ]);
   });
 });
 
@@ -246,6 +272,65 @@ describe("PlanningCenterPeopleService.getPersonSchedulesAfter", () => {
     expect(first.data.map((schedule) => schedule.id)).toStrictEqual([
       "schedule-1",
     ]);
+  });
+
+  it("adds declined schedules only when asked, under their own cache entry", async () => {
+    const core = createBasicPlanningCenterClient(
+      testPlanningCenterToken,
+      unreachableHttpClient
+    );
+    const fetchAllWithIncluded = vi
+      .spyOn(core, "fetchAllWithIncluded")
+      .mockReturnValue(Effect.succeed({ data: [], included: [] }));
+    const service = new PlanningCenterPeopleService(core);
+
+    await Effect.runPromise(
+      service.getPersonSchedulesAfter("person-1", "2026-03-24", 2)
+    );
+    await Effect.runPromise(
+      service.getPersonSchedulesAfter("person-1", "2026-03-24", 2, {
+        includeDeclined: true,
+      })
+    );
+
+    expect(fetchAllWithIncluded).toHaveBeenCalledTimes(2);
+    expect(fetchAllWithIncluded.mock.calls[1]?.[1]).toStrictEqual({
+      filter: "after,with_declined",
+      after: "2026-03-24",
+      include: "plan_times",
+      order: "starts_at",
+    });
+  });
+
+  it("reads newest first when asked, so a capped read keeps upcoming dates", async () => {
+    const core = createBasicPlanningCenterClient(
+      testPlanningCenterToken,
+      unreachableHttpClient
+    );
+    const fetchAllWithIncluded = vi
+      .spyOn(core, "fetchAllWithIncluded")
+      .mockReturnValue(Effect.succeed({ data: [], included: [] }));
+    const service = new PlanningCenterPeopleService(core);
+
+    await Effect.runPromise(
+      service.getPersonSchedulesAfter("person-1", "2026-03-24", 2, {
+        includeDeclined: true,
+      })
+    );
+    await Effect.runPromise(
+      service.getPersonSchedulesAfter("person-1", "2026-03-24", 2, {
+        includeDeclined: true,
+        newestFirst: true,
+      })
+    );
+
+    expect(fetchAllWithIncluded).toHaveBeenCalledTimes(2);
+    expect(fetchAllWithIncluded.mock.calls[1]?.[1]).toStrictEqual({
+      filter: "after,with_declined",
+      after: "2026-03-24",
+      include: "plan_times",
+      order: "-starts_at",
+    });
   });
 });
 

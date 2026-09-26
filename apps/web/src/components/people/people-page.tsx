@@ -1,13 +1,13 @@
-import type { PeopleDashboardPerson } from "@pcobooster/contracts/people-schemas";
+import type {
+  PeopleDashboardPerson,
+  PeopleDashboardTeam,
+} from "@pcobooster/contracts/people-schemas";
+import { formatCalendarDayInTimeZone } from "@pcobooster/planning-center-models/calendar";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { useCallback, useDeferredValue, useMemo, useState } from "react";
 
-import {
-  buildCalendarCells,
-  monthDays as defaultMonthDays,
-} from "@/components/people/calendar";
 import { PeopleDashboardProgress } from "@/components/people/dashboard-progress";
 import { PeopleHealthView } from "@/components/people/health-view";
 import { MonthView } from "@/components/people/month-view";
@@ -19,33 +19,146 @@ import {
 import { LoadingBar } from "@/components/ui/loading-bar";
 import {
   NativeSelect,
+  NativeSelectOptGroup,
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { GetIntentPrefetchProps } from "@/hooks/use-intent-prefetch";
 import { useIntentPrefetch } from "@/hooks/use-intent-prefetch";
+import type { GetIntentPrefetchProps } from "@/hooks/use-intent-prefetch";
+import { useOrganizationTimeZone } from "@/hooks/use-organization-timezone";
 import { usePeopleDashboard } from "@/hooks/use-people-dashboard";
 import { createPeopleDashboardPersonQueryOptions } from "@/hooks/use-people-dashboard-person";
 import { isQueryFresh } from "@/lib/intent-prefetch";
-import type { PeopleDashboardData } from "@/lib/people-dashboard";
+import {
+  parsePeopleDashboardScope,
+  scopeTeamIds,
+  teamScope,
+} from "@/lib/people-dashboard";
+import type {
+  PeopleDashboardData,
+  PeopleDashboardScope,
+} from "@/lib/people-dashboard";
 import { speculativeQuery } from "@/lib/request-priority";
+import { computeTeamHealth } from "@/lib/team-health";
+import type { TeamMember } from "@/lib/team-health";
 
-const EMPTY_PEOPLE: PeopleDashboardPerson[] = [];
-const EMPTY_TEAMS: string[] = [];
+const EMPTY_MEMBERS: TeamMember[] = [];
+const EMPTY_TEAMS: PeopleDashboardTeam[] = [];
+const EMPTY_TEAM_IDS: string[] = [];
+const OTHER_SERVICE_TYPE = "Other teams";
 
-type PeopleDashboardRange = "month" | "30" | "90";
+const MonthViewSkeleton = () => (
+  <div
+    className="grid shrink-0 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]"
+    aria-busy
+    aria-label="Loading month view"
+  >
+    <div className="border-border/40 flex flex-col gap-2 rounded-xl border p-4">
+      <Skeleton variant="text" className="h-4 w-36" />
+      {Array.from({ length: 8 }, (_, index) => (
+        <div key={index} className="flex items-center gap-3 py-1">
+          <Skeleton variant="round" className="size-7 shrink-0" />
+          <Skeleton variant="text" className="h-3 w-28" />
+          <Skeleton variant="text" className="ml-auto h-5 w-2/3" />
+        </div>
+      ))}
+    </div>
+    <Skeleton variant="control" className="h-72" />
+  </div>
+);
+
+const teamLabel = (team: PeopleDashboardTeam) =>
+  team.serviceTypeName === null
+    ? team.name
+    : `${team.name} · ${team.serviceTypeName}`;
+
+const describeScope = (
+  scope: PeopleDashboardScope,
+  teams: readonly PeopleDashboardTeam[],
+  ledTeamIds: readonly string[]
+) => {
+  const teamIds = scopeTeamIds(scope, ledTeamIds);
+  if (teamIds === null) {
+    return "All teams";
+  }
+  const [onlyTeamId] = teamIds;
+  const onlyTeam =
+    teamIds.length === 1
+      ? teams.find((team) => team.id === onlyTeamId)
+      : undefined;
+  if (onlyTeam !== undefined) {
+    return teamLabel(onlyTeam);
+  }
+  return "Teams you lead";
+};
+
+/** Teams grouped by service type, in roster order within each group. */
+const groupTeams = (teams: readonly PeopleDashboardTeam[]) => {
+  const groups = new Map<string, PeopleDashboardTeam[]>();
+  for (const team of teams) {
+    const key = team.serviceTypeName ?? OTHER_SERVICE_TYPE;
+    const group = groups.get(key) ?? [];
+    group.push(team);
+    groups.set(key, group);
+  }
+  return [...groups.entries()].toSorted(([a], [b]) => {
+    if (a === OTHER_SERVICE_TYPE || b === OTHER_SERVICE_TYPE) {
+      return a === OTHER_SERVICE_TYPE ? 1 : -1;
+    }
+    return a.localeCompare(b);
+  });
+};
+
+const ScopeSelect = ({
+  scope,
+  teams,
+  ledTeamIds,
+  onChange,
+}: {
+  scope: PeopleDashboardScope;
+  teams: readonly PeopleDashboardTeam[];
+  ledTeamIds: readonly string[];
+  onChange: (scope: PeopleDashboardScope) => void;
+}) => {
+  const groups = useMemo(() => groupTeams(teams), [teams]);
+  return (
+    <NativeSelect
+      className="w-full"
+      aria-label="Choose teams"
+      value={scope}
+      onChange={(event) => {
+        const next = parsePeopleDashboardScope(event.target.value);
+        if (next !== null) {
+          onChange(next);
+        }
+      }}
+    >
+      {ledTeamIds.length > 0 ? (
+        <NativeSelectOption value="mine">Teams I lead</NativeSelectOption>
+      ) : null}
+      <NativeSelectOption value="all">All teams</NativeSelectOption>
+      {groups.map(([serviceType, groupTeamsList]) => (
+        <NativeSelectOptGroup key={serviceType} label={serviceType}>
+          {groupTeamsList.map((team) => (
+            <NativeSelectOption key={team.id} value={teamScope(team.id)}>
+              {team.name}
+            </NativeSelectOption>
+          ))}
+        </NativeSelectOptGroup>
+      ))}
+    </NativeSelect>
+  );
+};
 
 interface PeoplePageContentProps {
   activeView: "health" | "month";
   dashboard: PeopleDashboardData | undefined;
+  scopeLabel: string;
+  todayKey: string;
   isError: boolean;
   isLoading: boolean;
-  visiblePeople: PeopleDashboardPerson[];
-  mvp: PeopleDashboardPerson | null;
-  needsRest: PeopleDashboardPerson[];
-  underused: PeopleDashboardPerson[];
-  rhythmCalendarCells: ReturnType<typeof buildCalendarCells>;
+  visibleMembers: TeamMember[];
   getPersonIntentProps: GetIntentPrefetchProps<PeopleDashboardPerson>;
   onOpenPerson: (person: PeopleDashboardPerson) => void;
 }
@@ -53,16 +166,19 @@ interface PeoplePageContentProps {
 const PeoplePageContent = ({
   activeView,
   dashboard,
+  scopeLabel,
+  todayKey,
   isError,
   isLoading,
-  visiblePeople,
-  mvp,
-  needsRest,
-  underused,
-  rhythmCalendarCells,
+  visibleMembers,
   getPersonIntentProps,
   onOpenPerson,
 }: PeoplePageContentProps) => {
+  const members = dashboard?.people ?? EMPTY_MEMBERS;
+  const health = useMemo(
+    () => computeTeamHealth(members, todayKey),
+    [members, todayKey]
+  );
   if (isError) {
     return (
       <div className="border-border/40 text-muted-foreground rounded-lg border px-4 py-8 text-sm">
@@ -73,13 +189,11 @@ const PeoplePageContent = ({
   if (activeView === "health") {
     return (
       <PeopleHealthView
-        dashboard={dashboard}
-        visiblePeople={visiblePeople}
+        health={health}
+        scopeLabel={scopeLabel}
+        progress={dashboard?.progress}
+        visibleMembers={visibleMembers}
         isLoading={isLoading}
-        mvp={mvp}
-        needsRest={needsRest}
-        underused={underused}
-        rhythmCalendarCells={rhythmCalendarCells}
         getPersonIntentProps={getPersonIntentProps}
         onOpenPerson={onOpenPerson}
       />
@@ -88,7 +202,7 @@ const PeoplePageContent = ({
   if (dashboard) {
     return (
       <MonthView
-        people={visiblePeople}
+        people={visibleMembers}
         month={dashboard.month}
         monthDays={dashboard.monthDays}
         matrixDays={dashboard.matrixDays}
@@ -97,25 +211,7 @@ const PeoplePageContent = ({
       />
     );
   }
-  return (
-    <div
-      className="grid shrink-0 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]"
-      aria-busy
-      aria-label="Loading month view"
-    >
-      <div className="border-border/40 flex flex-col gap-2 rounded-xl border p-4">
-        <Skeleton variant="text" className="h-4 w-36" />
-        {Array.from({ length: 8 }, (_, index) => (
-          <div key={index} className="flex items-center gap-3 py-1">
-            <Skeleton variant="round" className="size-7 shrink-0" />
-            <Skeleton variant="text" className="h-3 w-28" />
-            <Skeleton variant="text" className="ml-auto h-5 w-2/3" />
-          </div>
-        ))}
-      </div>
-      <Skeleton variant="control" className="h-72" />
-    </div>
-  );
+  return <MonthViewSkeleton />;
 };
 
 export const PeoplePage = () => {
@@ -124,10 +220,14 @@ export const PeoplePage = () => {
   const router = useRouter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const orgTimeZone = useOrganizationTimeZone();
+  const todayKey = formatCalendarDayInTimeZone(new Date(), orgTimeZone);
   const [activeView, setActiveView] = useState<"health" | "month">("health");
-  const [range, setRange] = useState<PeopleDashboardRange>("month");
-  const [selectedTeam, setSelectedTeam] = useState("all");
+  const [scopeChoice, setScopeChoice] = useState<PeopleDashboardScope | null>(
+    null
+  );
   const {
+    scope,
     dashboard,
     isLoading,
     isError,
@@ -137,35 +237,25 @@ export const PeoplePage = () => {
     retryFailed,
     canLoadMore,
     loadMore,
-  } = usePeopleDashboard();
-  const people = dashboard?.people ?? EMPTY_PEOPLE;
-  const teamOptions = dashboard?.teams ?? EMPTY_TEAMS;
+  } = usePeopleDashboard(scopeChoice);
+  const members = dashboard?.people ?? EMPTY_MEMBERS;
+  const teams = dashboard?.teams ?? EMPTY_TEAMS;
+  const ledTeamIds = dashboard?.ledTeamIds ?? EMPTY_TEAM_IDS;
+  const scopeLabel = describeScope(scope, teams, ledTeamIds);
 
-  const rhythmCalendarCells = dashboard
-    ? buildCalendarCells(
-        dashboard.month.startsOnWeekday,
-        dashboard.month.daysInMonth
-      )
-    : buildCalendarCells(0, defaultMonthDays.length);
-
-  const visiblePeople = useMemo(() => {
+  const visibleMembers = useMemo(() => {
     const normalized = deferredQuery.trim().toLowerCase();
-    return people.filter(
-      (person) =>
-        (selectedTeam === "all" || person.teams.includes(selectedTeam)) &&
-        (!normalized ||
-          [person.name, person.roles, ...person.teams]
-            .join(" ")
-            .toLowerCase()
-            .includes(normalized))
+    if (!normalized) {
+      return members;
+    }
+    return members.filter((member) =>
+      [member.name, member.roles, ...member.teams]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized)
     );
-  }, [deferredQuery, people, selectedTeam]);
+  }, [deferredQuery, members]);
 
-  const mvp = people.at(0) ?? null;
-  const needsRest = people.filter(
-    (person) => person.load === "rest" || person.load === "high"
-  );
-  const underused = people.filter((person) => person.load === "low");
   const prefetchPersonDetail = useCallback(
     async (person: PeopleDashboardPerson) => {
       void router.preloadRoute({
@@ -215,7 +305,7 @@ export const PeoplePage = () => {
                 People
               </h1>
               <p className="text-muted-foreground text-sm max-md:hidden">
-                Serving health, rotation rhythm, and monthly people insights.
+                Team health, who to check in with, and who is due to serve.
               </p>
             </div>
             <Tabs
@@ -231,8 +321,8 @@ export const PeoplePage = () => {
             </Tabs>
           </div>
 
-          <div className="grid shrink-0 grid-cols-2 items-center gap-2 md:grid-cols-[minmax(0,1fr)_160px_190px]">
-            <InputGroup className="col-span-2 md:col-span-1">
+          <div className="grid shrink-0 items-center gap-2 md:grid-cols-[minmax(0,1fr)_16rem]">
+            <InputGroup>
               <InputGroupAddon>
                 <Search />
               </InputGroupAddon>
@@ -245,40 +335,12 @@ export const PeoplePage = () => {
                 aria-label="Search people"
               />
             </InputGroup>
-            <NativeSelect
-              className="w-full"
-              aria-label="Select time range"
-              value={range}
-              onChange={(event) => {
-                const nextRange = event.target.value;
-                if (
-                  nextRange === "month" ||
-                  nextRange === "30" ||
-                  nextRange === "90"
-                ) {
-                  setRange(nextRange);
-                }
-              }}
-            >
-              <NativeSelectOption value="month">This month</NativeSelectOption>
-              <NativeSelectOption value="30">Last 30 days</NativeSelectOption>
-              <NativeSelectOption value="90">Last 90 days</NativeSelectOption>
-            </NativeSelect>
-            <NativeSelect
-              className="w-full"
-              aria-label="Filter team"
-              value={selectedTeam}
-              onChange={(event) => {
-                setSelectedTeam(event.target.value);
-              }}
-            >
-              <NativeSelectOption value="all">All teams</NativeSelectOption>
-              {teamOptions.map((team) => (
-                <NativeSelectOption key={team} value={team}>
-                  {team}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+            <ScopeSelect
+              scope={scope}
+              teams={teams}
+              ledTeamIds={ledTeamIds}
+              onChange={setScopeChoice}
+            />
           </div>
         </header>
 
@@ -300,13 +362,11 @@ export const PeoplePage = () => {
           <PeoplePageContent
             activeView={activeView}
             dashboard={dashboard}
+            scopeLabel={scopeLabel}
+            todayKey={todayKey}
             isError={isError}
             isLoading={isLoading}
-            visiblePeople={visiblePeople}
-            mvp={mvp}
-            needsRest={needsRest}
-            underused={underused}
-            rhythmCalendarCells={rhythmCalendarCells}
+            visibleMembers={visibleMembers}
             getPersonIntentProps={getPersonIntentProps}
             onOpenPerson={openPerson}
           />

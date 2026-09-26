@@ -84,6 +84,15 @@ const roster = (): PeopleDashboardRoster => ({
       teams: ["Band"],
     },
   ],
+  teams: [
+    {
+      id: "team-1",
+      name: "Band",
+      serviceTypeName: "Sunday",
+      personIds: ["person-1"],
+    },
+  ],
+  ledTeamIds: ["team-1"],
 });
 
 const activity = (id: string): PeopleDashboardActivity => {
@@ -94,7 +103,23 @@ const activity = (id: string): PeopleDashboardActivity => {
     teams: _teams,
     ...serving
   } = dashboardPerson;
-  return { ...serving, id };
+  return {
+    ...serving,
+    id,
+    rhythm: {
+      lastServedOn: "2026-05-10",
+      nextServingOn: "2026-05-31",
+      servedDays30: 1,
+      servedDays90: 2,
+      servedDays180: 4,
+      upcomingDays30: 1,
+      typicalGapDays: 21,
+      requests180: 5,
+      declined180: 0,
+      pendingUpcoming: 1,
+      nextPendingOn: "2026-05-31",
+    },
+  };
 };
 
 const personDetail = (): PeopleDashboardPersonDetail => ({
@@ -178,6 +203,7 @@ describe("people dashboard cache", () => {
     writeCachedPeopleDashboardActivity([activity("person-1")]);
     writeCachedPeopleDashboardPerson("person-1", "2026-05", personDetail());
     window.localStorage.setItem("unrelated", "keep");
+    window.localStorage.setItem("pcobooster:people-dashboard:v1:roster", "{}");
 
     clearCachedPeopleDashboards();
 
@@ -187,6 +213,9 @@ describe("people dashboard cache", () => {
       readCachedPeopleDashboardPerson("person-1", "2026-05")
     ).toBeUndefined();
     expect(window.localStorage.getItem("unrelated")).toBe("keep");
+    expect(
+      window.localStorage.getItem("pcobooster:people-dashboard:v1:roster")
+    ).toBeNull();
   });
 
   it("round-trips person detail snapshots with the saved timestamp", () => {

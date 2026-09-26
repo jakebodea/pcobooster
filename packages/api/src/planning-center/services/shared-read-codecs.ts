@@ -17,7 +17,15 @@ const resourcesSchema = z.array(pcResourceSchema);
 const storedAllTeamPeopleSchema = z.object({
   people: resourcesSchema,
   included: resourcesSchema,
-  teamNamesByPersonId: z.array(z.tuple([z.string(), z.array(z.string())])),
+  teams: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      serviceTypeName: z.string().nullable(),
+      personIds: z.array(z.string()),
+      leaderPersonIds: z.array(z.string()),
+    })
+  ),
 });
 
 /** Parses stored text with a schema; anything malformed or unexpected is `null`. */
@@ -39,31 +47,7 @@ export const resourceListCodec: SharedReadCodec<PCResource[]> = {
   decode: (stored) => parseStored(resourcesSchema, stored),
 };
 
-/** Team names are a `Map` of `Set`s in memory and entry lists in the store. */
 export const allTeamPeopleCodec: SharedReadCodec<AllTeamPeople> = {
-  encode: ({ people, included, teamNamesByPersonId }) =>
-    JSON.stringify({
-      people,
-      included,
-      teamNamesByPersonId: [...teamNamesByPersonId].map(([personId, names]) => [
-        personId,
-        [...names],
-      ]),
-    }),
-  decode: (stored) => {
-    const parsed = parseStored(storedAllTeamPeopleSchema, stored);
-    if (parsed === null) {
-      return null;
-    }
-    return {
-      people: parsed.people,
-      included: parsed.included,
-      teamNamesByPersonId: new Map(
-        parsed.teamNamesByPersonId.map(([personId, names]) => [
-          personId,
-          new Set(names),
-        ])
-      ),
-    };
-  },
+  encode: (value) => JSON.stringify(value),
+  decode: (stored) => parseStored(storedAllTeamPeopleSchema, stored),
 };

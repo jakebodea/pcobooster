@@ -23,6 +23,8 @@ const roster = (ids: string[]): PeopleDashboardRoster => ({
     photoThumbnailUrl: null,
     teams: ["Band"],
   })),
+  teams: [],
+  ledTeamIds: [],
 });
 
 describe(planCleanupPeopleBatches, () => {

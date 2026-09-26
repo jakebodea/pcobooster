@@ -9,11 +9,17 @@ import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 
 import {
   assemblePeopleDashboard,
+  defaultPeopleDashboardScope,
+  initialScopeLoadCount,
   PEOPLE_DASHBOARD_BATCH_CONCURRENCY,
   PEOPLE_DASHBOARD_SAMPLE_SIZE,
   planPeopleDashboardBatches,
+  resolveScopePersonIds,
 } from "@/lib/people-dashboard";
-import type { PeopleDashboardData } from "@/lib/people-dashboard";
+import type {
+  PeopleDashboardData,
+  PeopleDashboardScope,
+} from "@/lib/people-dashboard";
 import {
   readCachedPeopleDashboardActivity,
   readCachedPeopleDashboardRoster,
@@ -87,18 +93,21 @@ export const readPeopleDashboardFromQueryCache = (
       queryKey: ["people-dashboard-activity"],
     })
     .flatMap(([, data]) => data ?? []);
-  return assemblePeopleDashboard(roster, activities, activities.length);
+  return assemblePeopleDashboard(roster, activities, {
+    scopePersonIds: roster.people.map((person) => person.id),
+    requestedPeopleCount: activities.length,
+  });
 };
 
 /**
- * Loads the roster first, then serving activity in small batches, and
- * assembles whatever has arrived so the page fills in progressively.
+ * Loads the roster first, then serving activity for the scope's people in
+ * small batches, and assembles whatever has arrived so the page fills in
+ * progressively. With no `scopeChoice`, a leader sees the teams they lead.
  */
-export const usePeopleDashboard = () => {
+export const usePeopleDashboard = (
+  scopeChoice: PeopleDashboardScope | null
+) => {
   const queryClient = useQueryClient();
-  const [targetPeopleCount, setTargetPeopleCount] = useState(
-    PEOPLE_DASHBOARD_SAMPLE_SIZE
-  );
   const rosterKey = queryKeys.peopleDashboardRoster();
   useHydrateQueryFromCache(rosterKey, readCachedPeopleDashboardRoster);
   const rosterQuery = useQuery({
@@ -107,15 +116,26 @@ export const usePeopleDashboard = () => {
     staleTime: ROSTER_STALE_TIME_MS,
   });
   const roster = rosterQuery.data;
+  const scope =
+    scopeChoice ?? (roster ? defaultPeopleDashboardScope(roster) : "all");
+  const scopePersonIds = useMemo(
+    () => (roster ? resolveScopePersonIds(roster, scope) : []),
+    [roster, scope]
+  );
+  // "Load more" belongs to the scope it was asked in.
+  const [extraPeople, setExtraPeople] = useState({ scope, count: 0 });
+  const targetPeopleCount =
+    initialScopeLoadCount(scope, scopePersonIds.length) +
+    (extraPeople.scope === scope ? extraPeople.count : 0);
 
   const batches = useMemo(
     () =>
       planPeopleDashboardBatches(
-        roster,
+        scopePersonIds,
         targetPeopleCount,
         PEOPLE_DASHBOARD_ACTIVITY_BATCH_SIZE
       ),
-    [roster, targetPeopleCount]
+    [scopePersonIds, targetPeopleCount]
   );
   // Layout effect so saved activity lands before the first paint.
   useLayoutEffect(() => {
@@ -156,9 +176,12 @@ export const usePeopleDashboard = () => {
   const dashboard = useMemo(
     () =>
       roster
-        ? assemblePeopleDashboard(roster, activities, requestedPeopleCount)
+        ? assemblePeopleDashboard(roster, activities, {
+            scopePersonIds,
+            requestedPeopleCount,
+          })
         : undefined,
-    [activities, requestedPeopleCount, roster]
+    [activities, requestedPeopleCount, roster, scopePersonIds]
   );
 
   const failedBatches = batchQueries.filter((query) => query.isError);
@@ -166,8 +189,13 @@ export const usePeopleDashboard = () => {
   const isLoadingActivity = batchQueries.some((query) => query.isPending);
   const hasPeople = (dashboard?.people.length ?? 0) > 0;
   const loadMore = useCallback(() => {
-    setTargetPeopleCount((count) => count + PEOPLE_DASHBOARD_SAMPLE_SIZE);
-  }, []);
+    setExtraPeople((current) => ({
+      scope,
+      count:
+        (current.scope === scope ? current.count : 0) +
+        PEOPLE_DASHBOARD_SAMPLE_SIZE,
+    }));
+  }, [scope]);
   const retryFailed = useCallback(() => {
     for (const query of failedBatches) {
       void query.refetch();
@@ -175,6 +203,7 @@ export const usePeopleDashboard = () => {
   }, [failedBatches]);
 
   return {
+    scope,
     dashboard,
     isLoading:
       !hasPeople &&
@@ -189,7 +218,7 @@ export const usePeopleDashboard = () => {
     canLoadMore:
       roster !== undefined &&
       !isLoadingActivity &&
-      requestedPeopleCount < roster.people.length,
+      requestedPeopleCount < scopePersonIds.length,
     loadMore,
   };
 };

@@ -6,7 +6,15 @@ import type {
   PeopleDashboardLoad,
   PeopleDashboardRoster,
   PeopleDashboardRosterPerson,
+  PeopleDashboardTeam,
 } from "@pcobooster/api/modules/planning-center/people-dashboard-types";
+import {
+  buildServingRhythm,
+  isDeclinedStatus,
+  RHYTHM_HISTORY_DAYS,
+  scheduleSortDate,
+  scheduleStatus,
+} from "@pcobooster/api/modules/planning-center/serving-rhythm";
 import type { PlanningCenterError } from "@pcobooster/api/planning-center/core-client";
 import { recoverPlanningCenterFailure } from "@pcobooster/api/planning-center/recover-failure";
 import {
@@ -15,7 +23,10 @@ import {
   PROGRESSIVE_REQUEST_BUDGET,
   withPlanningCenterRequestCount,
 } from "@pcobooster/api/planning-center/request-budget";
-import type { PlanningCenterPeopleService } from "@pcobooster/api/planning-center/services/people-service";
+import type {
+  PlanningCenterPeopleService,
+  TeamRoster,
+} from "@pcobooster/api/planning-center/services/people-service";
 import { PLAN_RANGE_MAX_PAGES } from "@pcobooster/api/planning-center/services/plans-service";
 import type { PlanningCenterPlansService } from "@pcobooster/api/planning-center/services/plans-service";
 import { findIncluded } from "@pcobooster/api/planning-center/utils";
@@ -35,12 +46,21 @@ import { Effect } from "effect";
 /**
  * 100 schedules per page. The busiest volunteer measured had 23 schedules in
  * the window, so one page is typical and two leave room for heavy servers.
+ * Schedules are read newest first, so a person past the cap loses their
+ * oldest history, never their upcoming dates.
  */
 const SCHEDULE_MAX_PAGES = 2;
+const SCHEDULE_PAGE_SIZE = 100;
 /** Workers allows 6 open connections per invocation; leave headroom. */
 const READ_CONCURRENCY = 4;
-/** The 90-day cadence counts, plus one day for the org-day boundary. */
-const HISTORY_WINDOW_DAYS = 91;
+/**
+ * Rehearsal times are resolved for the 90-day cadence counts and the month
+ * view, plus one day for the org-day boundary; older schedules keep their
+ * plan dates.
+ */
+const PLAN_TIME_WINDOW_DAYS = 91;
+/** Schedules are read for the serving rhythm, plus one day for the org-day boundary. */
+const SCHEDULE_HISTORY_DAYS = RHYTHM_HISTORY_DAYS + 1;
 /** Upcoming schedules and plans are read up to a year ahead. */
 const FUTURE_WINDOW_DAYS = 366;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -53,6 +73,8 @@ export interface PeopleDashboardRosterDependencies {
     "getAllPeopleFromTeams"
   >;
   readonly resolveTimeZone: Effect.Effect<string, PlanningCenterError>;
+  /** The signed-in person, to find the teams they lead; null when unknown. */
+  readonly viewerPersonId: string | null;
 }
 
 export interface PeopleDashboardActivityDependencies {
@@ -399,15 +421,36 @@ export const countServiceDaysInWindow = (
 
 const buildPersonActivity = (
   personId: string,
-  schedules: PCResource[],
+  allSchedules: PCResource[],
   included: PCResource[],
   now: Date,
   orgTimeZone: string
 ): PeopleDashboardActivity => {
-  const serviceHistory = schedules.flatMap((resource) =>
-    mapScheduleToDashboardItems(resource, included)
+  const rhythmSchedules = allSchedules.map((resource) => {
+    const status = scheduleStatus(resource);
+    const items = isDeclinedStatus(status)
+      ? []
+      : mapScheduleToDashboardItems(resource, included);
+    return {
+      status,
+      sortDate: scheduleSortDate(resource) ?? items[0]?.date ?? now,
+      items,
+    };
+  });
+  const rhythm = buildServingRhythm(
+    rhythmSchedules.map(({ status, sortDate, items }) => ({
+      status,
+      sortDate,
+      serviceDates: items.flatMap((item) =>
+        item.timeType === "rehearsal" ? [] : [item.date]
+      ),
+    })),
+    now,
+    orgTimeZone
   );
-  serviceHistory.sort((a, b) => a.date.getTime() - b.date.getTime());
+  const serviceHistory = rhythmSchedules
+    .flatMap(({ items }) => items)
+    .toSorted((a, b) => a.date.getTime() - b.date.getTime());
 
   const frequency = buildFrequencyFromServiceHistory(
     serviceHistory,
@@ -449,6 +492,7 @@ const buildPersonActivity = (
 
   return {
     id: personId,
+    rhythm,
     roles,
     status: getStatus(
       load,
@@ -493,10 +537,23 @@ export const initialsFromName = (name: string) => {
   return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
 };
 
+const teamNamesByPersonId = (teams: readonly TeamRoster[]) => {
+  const names = new Map<string, Set<string>>();
+  for (const team of teams) {
+    for (const personId of team.personIds) {
+      const personNames = names.get(personId) ?? new Set<string>();
+      personNames.add(team.name);
+      names.set(personId, personNames);
+    }
+  }
+  return names;
+};
+
 const buildRosterPeople = (
   people: PCResource[],
-  teamNamesByPersonId: Map<string, Set<string>>
+  teams: readonly TeamRoster[]
 ): PeopleDashboardRosterPerson[] => {
+  const namesByPersonId = teamNamesByPersonId(teams);
   const rosterPeople = new Map<
     string,
     { firstName: string; lastName: string; person: PeopleDashboardRosterPerson }
@@ -514,7 +571,7 @@ const buildRosterPeople = (
     const firstName = isString(rawFirstName) ? rawFirstName : "";
     const lastName = isString(rawLastName) ? rawLastName : "";
     const name = `${firstName} ${lastName}`.trim();
-    const teams = [...(teamNamesByPersonId.get(resource.id) ?? [])];
+    const personTeams = [...(namesByPersonId.get(resource.id) ?? [])];
     const photo = resource.attributes.photo_thumbnail_url;
     rosterPeople.set(resource.id, {
       firstName,
@@ -524,7 +581,7 @@ const buildRosterPeople = (
         name: name || "Unknown person",
         initials: initialsFromName(name),
         photoThumbnailUrl: isString(photo) ? photo : null,
-        teams: teams.length > 0 ? teams.slice(0, 3) : ["Services"],
+        teams: personTeams.length > 0 ? personTeams.slice(0, 3) : ["Services"],
       },
     });
   }
@@ -538,10 +595,31 @@ const buildRosterPeople = (
     .map(({ person }) => person);
 };
 
-/** One read of every active team's members; no schedules. */
+/** Teams with at least one listed member, by name, then service type. */
+const buildDashboardTeams = (
+  teams: readonly TeamRoster[],
+  rosterPersonIds: ReadonlySet<string>
+): PeopleDashboardTeam[] =>
+  teams
+    .flatMap(({ id, name, serviceTypeName, personIds }) => {
+      const listed = personIds.filter((personId) =>
+        rosterPersonIds.has(personId)
+      );
+      return listed.length > 0
+        ? [{ id, name, serviceTypeName, personIds: listed }]
+        : [];
+    })
+    .toSorted(
+      (a, b) =>
+        a.name.localeCompare(b.name) ||
+        (a.serviceTypeName ?? "").localeCompare(b.serviceTypeName ?? "")
+    );
+
+/** One read of every active team's members and leaders; no schedules. */
 export const getPeopleDashboardRoster = ({
   peopleService,
   resolveTimeZone,
+  viewerPersonId,
 }: PeopleDashboardRosterDependencies): Effect.Effect<
   PeopleDashboardRoster,
   PlanningCenterError
@@ -550,15 +628,35 @@ export const getPeopleDashboardRoster = ({
     const orgTimeZone = yield* resolveTimeZone;
     const now = new Date();
     const roster = yield* peopleService.getAllPeopleFromTeams();
-    const people = buildRosterPeople(roster.people, roster.teamNamesByPersonId);
+    const people = buildRosterPeople(roster.people, roster.teams);
+    const teams = buildDashboardTeams(
+      roster.teams,
+      new Set(people.map((person) => person.id))
+    );
+    const listedTeamIds = new Set(teams.map((team) => team.id));
+    const ledTeamIds =
+      viewerPersonId === null
+        ? []
+        : roster.teams.flatMap((team) =>
+            listedTeamIds.has(team.id) &&
+            team.leaderPersonIds.includes(viewerPersonId)
+              ? [team.id]
+              : []
+          );
     log.info(
-      { rosterPeopleCount: people.length },
+      {
+        rosterPeopleCount: people.length,
+        teamCount: teams.length,
+        ledTeamCount: ledTeamIds.length,
+      },
       "People dashboard roster read"
     );
     return {
       generatedAt: now.toISOString(),
       month: getMonthInfo(now, orgTimeZone),
       people,
+      teams,
+      ledTeamIds,
     };
   });
 
@@ -630,10 +728,14 @@ export const getPeopleDashboardActivity = ({
   Effect.gen(function* readPeopleDashboardActivity() {
     const orgTimeZone = yield* resolveTimeZone;
     const now = new Date();
-    const afterDayKey = formatCalendarDayInTimeZone(
-      new Date(now.getTime() - HISTORY_WINDOW_DAYS * DAY_MS),
+    const historyDayKey = formatCalendarDayInTimeZone(
+      new Date(now.getTime() - SCHEDULE_HISTORY_DAYS * DAY_MS),
       orgTimeZone
     );
+    const planTimeStart = new Date(
+      now.getTime() - PLAN_TIME_WINDOW_DAYS * DAY_MS
+    );
+    const afterDayKey = formatCalendarDayInTimeZone(planTimeStart, orgTimeZone);
     const beforeDayKey = formatCalendarDayInTimeZone(
       new Date(now.getTime() + FUTURE_WINDOW_DAYS * DAY_MS),
       orgTimeZone
@@ -662,8 +764,9 @@ export const getPeopleDashboardActivity = ({
         Effect.map(
           peopleService.getPersonSchedulesAfter(
             personId,
-            afterDayKey,
-            SCHEDULE_MAX_PAGES
+            historyDayKey,
+            SCHEDULE_MAX_PAGES,
+            { includeDeclined: true, newestFirst: true }
           ),
           ({ data, included }): PersonSchedules => ({
             personId,
@@ -676,7 +779,19 @@ export const getPeopleDashboardActivity = ({
     const afterSchedules = yield* planningCenterRequestsSpent;
 
     // In order of first need, so the first person's service types come first.
-    const missing = findServiceTypesMissingPlanTimes(schedules);
+    // Only schedules the plan-range reads cover need their rehearsal times.
+    const missing = findServiceTypesMissingPlanTimes(
+      schedules.map((person) => ({
+        ...person,
+        data: person.data.filter((schedule) => {
+          const sortDate = scheduleSortDate(schedule);
+          return (
+            !isDeclinedStatus(scheduleStatus(schedule)) &&
+            (sortDate === undefined || sortDate >= planTimeStart)
+          );
+        }),
+      }))
+    );
     const serviceTypeIds = [...missing.keys()];
     const [firstPersonId] = admitted;
     const firstPersonTypes = serviceTypeIds.filter(
@@ -760,6 +875,10 @@ export const getPeopleDashboardActivity = ({
         hydratedPeopleCount: people.length,
         deferredPeopleCount: deferred.size,
         unreadFirstPersonServiceTypeCount: unreadFirstPersonTypes,
+        // Full reads may have stopped at the page cap, dropping oldest history.
+        scheduleCapReachedPeopleCount: schedules.filter(
+          ({ data }) => data.length >= SCHEDULE_MAX_PAGES * SCHEDULE_PAGE_SIZE
+        ).length,
       },
       "People dashboard activity read"
     );

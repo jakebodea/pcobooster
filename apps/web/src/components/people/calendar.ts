@@ -97,19 +97,6 @@ export const buildCalendarCells = (
   return [...blanks, ...days];
 };
 
-export const loadBadge = (load: "low" | "normal" | "high" | "rest") => {
-  if (load === "high") {
-    return { label: "High", className: "text-status-scheduled" };
-  }
-  if (load === "rest") {
-    return { label: "Rest", className: "text-destructive" };
-  }
-  if (load === "low") {
-    return { label: "Low", className: "text-muted-foreground" };
-  }
-  return { label: "Normal", className: "text-foreground" };
-};
-
 /** Heatmap tone for a day; rehearsal-only days read as lightly busy. */
 export const heatLevelTone = (
   serviceCount: number,

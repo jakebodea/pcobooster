@@ -105,10 +105,32 @@ describe("people read contracts", () => {
       generatedAt: "2026-09-19T17:00:00Z",
       month,
       people: [{ id, name, initials, photoThumbnailUrl, teams }],
+      teams: [
+        {
+          id: "team-1",
+          name: "Band",
+          serviceTypeName: null,
+          personIds: [id],
+        },
+      ],
+      ledTeamIds: ["team-1"],
+    };
+    const rhythm = {
+      lastServedOn: "2026-09-13",
+      nextServingOn: null,
+      servedDays30: 1,
+      servedDays90: 3,
+      servedDays180: 6,
+      upcomingDays30: 0,
+      typicalGapDays: 21,
+      requests180: 7,
+      declined180: 1,
+      pendingUpcoming: 0,
+      nextPendingOn: null,
     };
     const batch = {
       generatedAt: roster.generatedAt,
-      people: [{ id, ...activity }],
+      people: [{ id, rhythm, ...activity }],
       deferredPersonIds: ["person-2"],
       requestBudget: {
         limit: 40,
@@ -137,8 +159,13 @@ describe("people read contracts", () => {
     expect(peopleDashboardActivityBatchSchema.parse(batch)).toStrictEqual(
       batch
     );
+    // The rhythm feeds the team dashboard; a person detail does not carry it.
     expect(
-      peopleDashboardPersonSchema.parse({ ...roster.people[0], ...activity })
+      peopleDashboardPersonSchema.parse({
+        ...roster.people[0],
+        ...activity,
+        rhythm,
+      })
     ).toStrictEqual(dashboardPerson);
     expect(peopleDashboardPersonDetailSchema.parse(detail)).toStrictEqual(
       detail

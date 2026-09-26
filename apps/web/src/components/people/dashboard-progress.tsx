@@ -17,7 +17,7 @@ const describeProgress = (
   if (isLoadingActivity) {
     return `Loading schedules: ${progress.hydratedPeopleCount} of ${progress.requestedPeopleCount} people.`;
   }
-  return `Showing ${progress.hydratedPeopleCount} of ${progress.rosterPeopleCount} roster people.`;
+  return `Showing ${progress.hydratedPeopleCount} of ${progress.scopePeopleCount} people.`;
 };
 
 /** How much of the roster has schedules loaded, with retry and load-more actions. */
@@ -35,7 +35,7 @@ export const PeopleDashboardProgress = ({
   const complete =
     !isLoadingActivity &&
     failedBatchCount === 0 &&
-    progress.hydratedPeopleCount >= progress.rosterPeopleCount;
+    progress.hydratedPeopleCount >= progress.scopePeopleCount;
   if (complete) {
     return null;
   }

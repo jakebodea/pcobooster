@@ -11,8 +11,11 @@ import { z } from "zod";
 
 import { presentationCacheKey } from "@/lib/presentation-cache";
 
-const CACHE_VERSION = "v1";
-const KEY_PREFIX = `pcobooster:people-dashboard:${CACHE_VERSION}:`;
+/** Every version's entries, so clearing also drops older versions' saved people. */
+const STORAGE_PREFIX = "pcobooster:people-dashboard:";
+/** v2: rosters carry teams and leaders; activity carries the serving rhythm. */
+const CACHE_VERSION = "v2";
+const KEY_PREFIX = `${STORAGE_PREFIX}${CACHE_VERSION}:`;
 const PERSON_DETAIL_KEY_PREFIX = `${KEY_PREFIX}person:`;
 const ROSTER_KEY = `${KEY_PREFIX}roster`;
 const ACTIVITY_KEY = `${KEY_PREFIX}activity`;
@@ -269,7 +272,7 @@ export const clearCachedPeopleDashboards = (): void => {
   try {
     for (let index = storage.length - 1; index >= 0; index -= 1) {
       const key = storage.key(index);
-      if (key?.startsWith(KEY_PREFIX) === true) {
+      if (key?.startsWith(STORAGE_PREFIX) === true) {
         storage.removeItem(key);
       }
     }

@@ -212,9 +212,30 @@ export const peopleDashboardRosterPersonSchema = z.object({
   teams: z.array(z.string()),
 });
 
+const calendarDayKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+
+/** How a person has been serving and responding; days are org `YYYY-MM-DD`. */
+export const servingRhythmSchema = z.object({
+  lastServedOn: calendarDayKeySchema.nullable(),
+  nextServingOn: calendarDayKeySchema.nullable(),
+  servedDays30: z.number(),
+  servedDays90: z.number(),
+  servedDays180: z.number(),
+  upcomingDays30: z.number(),
+  /** Median days between served days in the last 180; null with too few. */
+  typicalGapDays: z.number().nullable(),
+  /** Schedules dated in the last 180 days or later, declined included. */
+  requests180: z.number(),
+  declined180: z.number(),
+  /** Upcoming schedules still unconfirmed. */
+  pendingUpcoming: z.number(),
+  nextPendingOn: calendarDayKeySchema.nullable(),
+});
+
 /** How one roster person is serving, derived from their own schedules. */
 export const peopleDashboardActivitySchema = z.object({
   id: z.string(),
+  rhythm: servingRhythmSchema,
   roles: z.string(),
   status: z.string(),
   load: peopleDashboardLoadSchema,
@@ -242,14 +263,25 @@ export const peopleDashboardActivitySchema = z.object({
 
 export const peopleDashboardPersonSchema =
   peopleDashboardRosterPersonSchema.extend(
-    peopleDashboardActivitySchema.omit({ id: true }).shape
+    peopleDashboardActivitySchema.omit({ id: true, rhythm: true }).shape
   );
+
+export const peopleDashboardTeamSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** The team's service type, to tell same-named teams apart. */
+  serviceTypeName: z.string().nullable(),
+  personIds: z.array(z.string()),
+});
 
 export const peopleDashboardRosterSchema = z.object({
   generatedAt: z.string(),
   month: peopleDashboardMonthSchema,
   /** Sorted by last name, then first name. */
   people: z.array(peopleDashboardRosterPersonSchema),
+  teams: z.array(peopleDashboardTeamSchema),
+  /** Teams the signed-in person leads; empty when they lead none or are unknown. */
+  ledTeamIds: z.array(z.string()),
 });
 
 export const peopleDashboardActivityBatchSchema = z.object({
@@ -325,6 +357,8 @@ export type PeopleDashboardMonth = z.output<typeof peopleDashboardMonthSchema>;
 export type PeopleDashboardRosterPerson = z.output<
   typeof peopleDashboardRosterPersonSchema
 >;
+export type ServingRhythm = z.output<typeof servingRhythmSchema>;
+export type PeopleDashboardTeam = z.output<typeof peopleDashboardTeamSchema>;
 export type PeopleDashboardActivity = z.output<
   typeof peopleDashboardActivitySchema
 >;

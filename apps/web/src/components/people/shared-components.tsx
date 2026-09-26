@@ -94,7 +94,7 @@ export const PersonRowButton = ({
   getPersonIntentProps: GetIntentPrefetchProps<PeopleDashboardPerson>;
   onOpenPerson: (person: PeopleDashboardPerson) => void;
   variant?: "default" | "outline" | "muted";
-  size?: "default" | "sm" | "xs";
+  size?: "default" | "sm" | "xs" | "row";
   className?: string;
   children: ReactNode;
 }) => (

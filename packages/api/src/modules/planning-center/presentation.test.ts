@@ -225,6 +225,8 @@ const dashboard: PeopleDashboardRoster = {
       teams: dashboardPerson.teams,
     },
   ],
+  teams: [],
+  ledTeamIds: [],
   month: {
     year: 2026,
     monthIndex: 8,
